@@ -441,7 +441,7 @@ def postprocess_disparity(disparity, left_image=None, method='all', **kwargs):
     if method == 'all':
         # === STEP 1: Run independent filters ===
         
-        print("Running independent filters with Numba parallelization...")
+        print("Running independent filters with parallelization...")
         
         # Filter 1: Remove small isolated regions
         print("  [1/4] Speckle filtering...")
