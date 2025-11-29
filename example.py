@@ -8,7 +8,7 @@ if __name__ == "__main__":
     ndisp = 280  
     focal_length = 3997.684
     baseline_mm = 193.001
-    doffs = 131.111
+    doffs = 0.0
 
     # Using StereoDepthEstimator
     estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)

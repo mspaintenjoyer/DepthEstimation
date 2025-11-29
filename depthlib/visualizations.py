@@ -86,7 +86,7 @@ def visualize_depth(depth_m, title='Depth Map', cmap='turbo_r', max_depth=None,
     
     # Auto-scale to reasonable depth range
     if max_depth is None:
-        max_depth = np.percentile(depth_m[valid_mask], 95)
+        max_depth = np.percentile(depth_m[valid_mask], 99)
     
     # Create display array
     depth_display = np.copy(depth_m)

@@ -56,7 +56,7 @@ class StereoDepthEstimator:
             'focal_length': None,
             'baseline': None,
             'doffs': 0.0,
-            'max_depth': 100.0,
+            'max_depth': None,
             'cam_matrix_L': None,
             'cam_matrix_R': None,
             'image_width': None,
@@ -286,8 +286,8 @@ class StereoDepthEstimator:
         f_pixels = self.sgbm_params.get('focal_length', None)
         baseline_m = self.sgbm_params.get('baseline', None)
         doffs = self.sgbm_params.get('doffs', 0.0)
-        min_disparity = self.sgbm_params.get('min_disp', 0.5)
-        max_depth = self.sgbm_params.get('max_depth', 100.0)
+        min_disparity = self.sgbm_params.get('min_disp', 0.1)
+        max_depth = self.sgbm_params.get('max_depth')
         
         depth_m = None
         if f_pixels is not None and baseline_m is not None:
