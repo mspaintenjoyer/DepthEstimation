@@ -1,3 +1,4 @@
+from time import time
 import numpy as np
 import cv2
 from pathlib import Path
@@ -14,6 +15,7 @@ class StereoDepthEstimator:
             self,
             left_source, # Path to left image/video or camera index
             right_source, # Path to right image/video or camera index
+            downscale_factor=1.0,
             device='cpu', # 'cpu' or 'cuda'
     ):
         """
@@ -32,7 +34,9 @@ class StereoDepthEstimator:
         calibration_file : str, optional
             Path to calibration file
         """
-        self.left_source, self.right_source = load_stereo_pair(left_source, right_source)
+
+        self.downscale_factor = downscale_factor
+        self.left_source, self.right_source = load_stereo_pair(left_source, right_source, downscale_factor=downscale_factor)
         self.device = device
         
         # Store rectified images
@@ -126,6 +130,14 @@ class StereoDepthEstimator:
         # Validate num_disp is divisible by 16
         if 'num_disp' in kwargs and kwargs['num_disp'] > 280:
             raise ValueError(f"num_disp must be divisible by 16, got {kwargs['num_disp']}")
+
+        # Scale parameters by downscale factor if needed
+        if 'num_disp' in kwargs:
+            kwargs['num_disp'] = int(kwargs['num_disp'] * self.downscale_factor)
+        if 'focal_length' in kwargs:
+            kwargs['focal_length'] = kwargs['focal_length'] * self.downscale_factor
+        if 'doffs' in kwargs:
+            kwargs['doffs'] = kwargs['doffs'] * self.downscale_factor
         
         # Update parameters
         self.sgbm_params.update(kwargs)
@@ -238,7 +250,7 @@ class StereoDepthEstimator:
                 baseline,  # type: ignore
                 img_width,  # type: ignore
                 img_height,  # type: ignore
-                alpha=0.0
+                alpha=1.0  # Keep all pixels to maintain full image (may include black borders)
             )
         else:
             # If no calibration data, assume images are already rectified

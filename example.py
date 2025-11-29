@@ -1,4 +1,5 @@
 import depthlib
+import time
 
 if __name__ == "__main__":
     left_image_path = './assets/stereo_pairs/im0.png'
@@ -10,15 +11,17 @@ if __name__ == "__main__":
     doffs = 131.111
 
     # Using StereoDepthEstimator
-    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path)
+    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)
     estimator.configure_sgbm(
         num_disp=ndisp,
         focal_length=focal_length,
         baseline=baseline_mm / 1000.0,
         doffs=doffs
     )
+    start_time = time.time()
     disparity_px, depth_m = estimator.estimate_depth()
-
+    latency_ms = (time.time() - start_time) * 1000
+    print(f"Depth estimation completed in {latency_ms:.2f} ms")
     estimator.visualize_results()
 
     # Print raw disparity statistics
