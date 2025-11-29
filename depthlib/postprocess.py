@@ -400,13 +400,15 @@ def confidence_map(disparity_left, disparity_right, threshold=1.0):
     return confidence
 
 
-def postprocess_disparity(disparity, left_image=None, method='all', **kwargs):
+def postprocess_disparity(disparity, left_image=None, method='fast', **kwargs):
     """
-    Apply post-processing to disparity map with parallel execution.
+    Apply post-processing to disparity map with optimized pipeline.
     
-    Parallelization Strategy:
-    - PARALLEL: speckle, bilateral, and median filters (independent - run simultaneously using Numba)
-    - SEQUENTIAL: fill_holes (dependent - runs on combined result)
+    Processing Modes:
+    - 'fast': Lightweight pipeline (~20-50ms) - speckle + 3x3 median (DEFAULT)
+    - 'minimal': Speckle filtering only (~5-10ms) - fastest option
+    - 'quality': Full pipeline with bilateral filter (slower, higher quality)
+    - Individual filters: 'bilateral', 'median', 'speckle', 'fill'
     
     Parameters:
     -----------
@@ -415,16 +417,16 @@ def postprocess_disparity(disparity, left_image=None, method='all', **kwargs):
     left_image : np.ndarray, optional
         Left image for guided filtering (not used currently)
     method : str
-        Post-processing method: 'bilateral', 'median', 'speckle', 'fill', 'all'
-        Default: 'all' (runs all filters with parallelization)
+        Post-processing method: 'fast', 'minimal', 'quality', 'bilateral', 'median', 'speckle', 'fill'
+        Default: 'fast' (optimized for speed)
     **kwargs : dict
         Additional parameters for specific methods:
-        - max_speckle_size : int (default: 100)
+        - max_speckle_size : int (default: 50 for fast/minimal, 100 for quality)
         - max_diff : float (default: 1)
         - d : int (default: 9)
         - sigma_color : float (default: 75)
         - sigma_space : float (default: 75)
-        - kernel_size : int (default: 5)
+        - kernel_size : int (default: 3 for fast, 5 for others)
         - max_hole_size : int (default: 10)
         - combine_method : str (default: 'weighted_average')
           Options: 'weighted_average', 'median', 'average'
@@ -438,10 +440,40 @@ def postprocess_disparity(disparity, left_image=None, method='all', **kwargs):
         Post-processed disparity map
     """
     
-    if method == 'all':
-        # === STEP 1: Run independent filters ===
+    if method == 'fast':
+        # === FAST PIPELINE: Speckle + 3x3 Median (~20-50ms) ===
+        print("Running fast post-processing pipeline...")
         
-        print("Running independent filters with parallelization...")
+        # Step 1: Quick speckle removal
+        print("  [1/2] Speckle filtering...")
+        result = filter_speckles(
+            disparity.copy(),
+            kwargs.get('max_speckle_size', 50),
+            kwargs.get('max_diff', 1)
+        )
+        
+        # Step 2: Fast 3x3 median filter (Numba-parallelized)
+        print("  [2/2] 3x3 Median filtering...")
+        output = np.zeros_like(result, dtype=np.float32)
+        _median_filter_3x3_numba(result.astype(np.float32), output)
+        
+        print("✓ Fast post-processing complete!")
+        return output
+    
+    elif method == 'minimal':
+        # === MINIMAL PIPELINE: Speckle only (~5-10ms) ===
+        print("Running minimal post-processing (speckle only)...")
+        result = filter_speckles(
+            disparity.copy(),
+            kwargs.get('max_speckle_size', 50),
+            kwargs.get('max_diff', 1)
+        )
+        print("✓ Minimal post-processing complete!")
+        return result
+    
+    elif method == 'quality':
+        # === QUALITY PIPELINE: Full processing with all filters (slower) ===
+        print("Running quality post-processing pipeline...")
         
         # Filter 1: Remove small isolated regions
         print("  [1/4] Speckle filtering...")
@@ -471,7 +503,7 @@ def postprocess_disparity(disparity, left_image=None, method='all', **kwargs):
         
         print("✓ All independent filters completed!")
         
-        # === STEP 2: Combine the parallel results ===
+        # Combine the results
         combine_method = kwargs.get('combine_method', 'weighted_average')
         
         if combine_method == 'weighted_average':
@@ -493,12 +525,11 @@ def postprocess_disparity(disparity, left_image=None, method='all', **kwargs):
             # Simple average
             processed = (result_speckle + result_bilateral + result_median) / 3.0
         
-        # === STEP 3: Apply hole filling (SEQUENTIAL - depends on filtered results) ===
-        # This must run AFTER filtering to work effectively
+        # Apply hole filling
         print("  [4/4] Hole filling (Numba-parallelized)...")
         max_hole_size = kwargs.get('max_hole_size', 10)
         processed = fill_holes(processed, max_hole_size, use_numba=True)
-        print("✓ Post-processing complete!")
+        print("✓ Quality post-processing complete!")
         
         return processed
     
