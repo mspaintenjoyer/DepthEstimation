@@ -2,125 +2,6 @@
 
 import cv2
 import numpy as np
-from numba import jit, prange
-
-
-@jit(nopython=True, parallel=True, fastmath=True)
-def _bilateral_filter_numba(disparity, output, d, sigma_color, sigma_space):
-    """
-    Numba-accelerated bilateral filter implementation.
-    Applies edge-preserving smoothing in parallel.
-    """
-    h, w = disparity.shape
-    radius = d // 2
-    
-    for y in prange(h):  # Parallel loop over rows
-        for x in range(w):
-            center_val = disparity[y, x]
-            
-            if center_val <= 0:
-                output[y, x] = 0.0
-                continue
-            
-            sum_val = 0.0
-            weight_sum = 0.0
-            
-            for dy in range(-radius, radius + 1):
-                for dx in range(-radius, radius + 1):
-                    ny = y + dy
-                    nx = x + dx
-                    
-                    if 0 <= ny < h and 0 <= nx < w:
-                        neighbor_val = disparity[ny, nx]
-                        
-                        if neighbor_val > 0:
-                            # Spatial distance
-                            space_dist = np.sqrt(dx * dx + dy * dy)
-                            # Color distance
-                            color_dist = abs(center_val - neighbor_val)
-                            
-                            # Gaussian weights
-                            space_weight = np.exp(-space_dist * space_dist / (2 * sigma_space * sigma_space))
-                            color_weight = np.exp(-color_dist * color_dist / (2 * sigma_color * sigma_color))
-                            
-                            weight = space_weight * color_weight
-                            sum_val += neighbor_val * weight
-                            weight_sum += weight
-            
-            if weight_sum > 0:
-                output[y, x] = sum_val / weight_sum
-            else:
-                output[y, x] = center_val
-    
-    return output
-
-
-@jit(nopython=True, parallel=True)
-def _median_filter_3x3_numba(disparity, output):
-    """
-    Fast 3x3 median filter using Numba parallelization.
-    """
-    h, w = disparity.shape
-    
-    for y in prange(1, h - 1):  # Parallel loop, skip borders
-        for x in range(1, w - 1):
-            # Collect 3x3 neighborhood
-            values = []
-            for dy in range(-1, 2):
-                for dx in range(-1, 2):
-                    val = disparity[y + dy, x + dx]
-                    if val > 0:  # Only consider valid disparities
-                        values.append(val)
-            
-            if len(values) > 0:
-                # Simple median calculation
-                values_sorted = sorted(values)
-                n = len(values_sorted)
-                if n % 2 == 1:
-                    output[y, x] = values_sorted[n // 2]
-                else:
-                    output[y, x] = (values_sorted[n // 2 - 1] + values_sorted[n // 2]) / 2.0
-            else:
-                output[y, x] = disparity[y, x]
-    
-    return output
-
-
-@jit(nopython=True, parallel=True)
-def _fill_small_holes_numba(disparity, output, max_radius=2):
-    """
-    Fill small holes in disparity map using neighborhood interpolation.
-    Parallelized using Numba.
-    """
-    h, w = disparity.shape
-    
-    for y in prange(h):  # Parallel loop over rows
-        for x in range(w):
-            if disparity[y, x] > 0:
-                output[y, x] = disparity[y, x]
-            else:
-                # Hole detected, try to fill with neighborhood average
-                sum_val = 0.0
-                count = 0
-                
-                for dy in range(-max_radius, max_radius + 1):
-                    for dx in range(-max_radius, max_radius + 1):
-                        ny = y + dy
-                        nx = x + dx
-                        
-                        if 0 <= ny < h and 0 <= nx < w:
-                            neighbor_val = disparity[ny, nx]
-                            if neighbor_val > 0:
-                                sum_val += neighbor_val
-                                count += 1
-                
-                if count > 0:
-                    output[y, x] = sum_val / count
-                else:
-                    output[y, x] = 0.0
-    
-    return output
-
 
 def filter_speckles(disparity, max_speckle_size=100, max_diff=1):
     """
@@ -153,435 +34,138 @@ def filter_speckles(disparity, max_speckle_size=100, max_diff=1):
     
     return filtered
 
-
-def apply_bilateral_filter(disparity, d=9, sigma_color=75, sigma_space=75, use_numba=True):
+def detect_outliers(disparity, threshold=3.0, kernel_size=5):
     """
-    Apply bilateral filter to smooth disparity while preserving edges.
-    Uses Numba-accelerated implementation for better performance.
+    Detect outliers in disparity map using local statistics.
     
     Parameters:
     -----------
     disparity : np.ndarray
         Input disparity map
-    d : int
-        Diameter of pixel neighborhood
-    sigma_color : float
-        Filter sigma in the color space
-    sigma_space : float
-        Filter sigma in the coordinate space
-    use_numba : bool
-        Use Numba-accelerated version (default: True)
-    
-    Returns:
-    --------
-    filtered : np.ndarray
-        Filtered disparity map
-    """
-    if use_numba:
-        # Use parallelized Numba implementation
-        output = np.zeros_like(disparity, dtype=np.float32)
-        _bilateral_filter_numba(disparity.astype(np.float32), output, d, 
-                                float(sigma_color), float(sigma_space))
-        return output
-    else:
-        # Fallback to OpenCV implementation
-        # Normalize to 0-255 for better filtering
-        valid_mask = disparity > 0
-        if not valid_mask.any():
-            return disparity
-        
-        disp_norm = np.zeros_like(disparity, dtype=np.uint8)
-        disp_min = disparity[valid_mask].min()
-        disp_max = disparity[valid_mask].max()
-        
-        if disp_max > disp_min:
-            disp_norm[valid_mask] = ((disparity[valid_mask] - disp_min) / 
-                                      (disp_max - disp_min) * 255).astype(np.uint8)
-        
-        # Apply bilateral filter
-        filtered_norm = cv2.bilateralFilter(disp_norm, d, sigma_color, sigma_space)
-        
-        # Convert back to original scale
-        filtered = np.zeros_like(disparity)
-        filtered[valid_mask] = (filtered_norm[valid_mask].astype(np.float32) / 255.0 * 
-                                (disp_max - disp_min) + disp_min)
-        
-        return filtered
-
-
-def apply_wls_filter(disparity_left, disparity_right, left_image, 
-                     lambda_=8000, sigma=1.5):
-    """
-    Apply Weighted Least Squares (WLS) filter for edge-aware smoothing.
-    Requires both left and right disparity maps for better results.
-    
-    Parameters:
-    -----------
-    disparity_left : np.ndarray
-        Disparity map from left image
-    disparity_right : np.ndarray
-        Disparity map from right image (for consistency check)
-    left_image : np.ndarray
-        Left grayscale image (used as guide image)
-    lambda_ : float
-        Regularization parameter (higher = smoother)
-    sigma : float
-        Sensitivity to edges
-    
-    Returns:
-    --------
-    filtered : np.ndarray
-        Filtered disparity map
-    """
-    # Convert to 16-bit fixed point
-    disp_left_16s = (disparity_left * 16.0).astype(np.int16)
-    disp_right_16s = (disparity_right * 16.0).astype(np.int16)
-    
-    # Create WLS filter
-    wls_filter = cv2.ximgproc.createDisparityWLSFilter(matcher_left=None)
-    wls_filter.setLambda(lambda_)
-    wls_filter.setSigmaColor(sigma)
-    
-    # Apply filter
-    filtered_16s = wls_filter.filter(disp_left_16s, left_image, 
-                                     disparity_map_right=disp_right_16s)
-    
-    # Convert back to float32
-    filtered = filtered_16s.astype(np.float32) / 16.0
-    
-    return filtered
-
-
-def median_filter(disparity, kernel_size=5, use_numba=True):
-    """
-    Apply median filter to remove salt-and-pepper noise.
-    
-    Parameters:
-    -----------
-    disparity : np.ndarray
-        Input disparity map
+    threshold : float
+        Number of standard deviations for outlier detection
     kernel_size : int
-        Size of median filter kernel (must be odd)
-    use_numba : bool
-        Use Numba-accelerated 3x3 version when kernel_size=3 (default: True)
-    
+        Size of local neighborhood for statistics
+        
     Returns:
     --------
-    filtered : np.ndarray
-        Filtered disparity map
+    mask : np.ndarray (bool)
+        Boolean mask where True indicates outliers
     """
-    # Use fast Numba version for 3x3 kernel
-    if use_numba and kernel_size == 3:
-        output = np.zeros_like(disparity, dtype=np.float32)
-        _median_filter_3x3_numba(disparity.astype(np.float32), output)
-        return output
-    
-    # Fallback to OpenCV for other kernel sizes
-    # Preserve invalid regions
+    # Create a mask for valid disparities
     valid_mask = disparity > 0
     
-    # Convert to uint8 for median filtering
-    disp_norm = np.zeros_like(disparity, dtype=np.uint8)
-    if valid_mask.any():
-        disp_min = disparity[valid_mask].min()
-        disp_max = disparity[valid_mask].max()
-        if disp_max > disp_min:
-            disp_norm[valid_mask] = ((disparity[valid_mask] - disp_min) / 
-                                      (disp_max - disp_min) * 255).astype(np.uint8)
-        else:
-            return disparity
+    # Compute local mean and std using box filter
+    mean = cv2.boxFilter(disparity, -1, (kernel_size, kernel_size))
     
-        # Apply median filter
-        filtered_norm = cv2.medianBlur(disp_norm, kernel_size)
-        
-        # Convert back
-        filtered = np.zeros_like(disparity)
-        filtered[valid_mask] = (filtered_norm[valid_mask].astype(np.float32) / 255.0 * 
-                                    (disp_max - disp_min) + disp_min)
-        
-        return filtered
+    # Compute local standard deviation
+    disparity_sq = disparity ** 2
+    mean_sq = cv2.boxFilter(disparity_sq, -1, (kernel_size, kernel_size))
+    std = np.sqrt(np.maximum(mean_sq - mean ** 2, 0))
     
-    return disparity
+    # Detect outliers
+    diff = np.abs(disparity - mean)
+    outlier_mask = (diff > threshold * std) & valid_mask
+    
+    return outlier_mask
 
-
-def fill_holes(disparity, max_hole_size=10, use_numba=True):
+def fill_holes(disparity, mask=None, method='inpaint', kernel_size=5):
     """
-    Fill small holes in disparity map using interpolation.
+    Fill holes and invalid regions in disparity map.
     
     Parameters:
     -----------
     disparity : np.ndarray
         Input disparity map
-    max_hole_size : int
-        Maximum hole size to fill (pixels)
-    use_numba : bool
-        Use fast Numba-parallelized version (default: True)
-    
+    mask : np.ndarray (bool), optional
+        Boolean mask indicating holes to fill (True = hole)
+        If None, fills all zero/invalid values
+    method : str
+        Filling method: 'inpaint' or 'nearest'
+    kernel_size : int
+        Kernel size for morphological operations
+        
     Returns:
     --------
     filled : np.ndarray
-        Disparity map with holes filled
+        Disparity map with filled holes
     """
-    # Use fast Numba version for simple hole filling
-    if use_numba:
-        output = np.zeros_like(disparity, dtype=np.float32)
-        # Use max_radius = 2 (5x5 neighborhood) for fast filling
-        _fill_small_holes_numba(disparity.astype(np.float32), output, max_radius=2)
-        return output
-    
-    # Original OpenCV-based approach (slower but more sophisticated)
     filled = disparity.copy()
     
-    # Find invalid regions
-    invalid_mask = (disparity <= 0)
+    # Create hole mask if not provided
+    if mask is None:
+        mask = (disparity <= 0)
     
-    if not invalid_mask.any():
-        return filled
+    # Convert mask to uint8 for OpenCV
+    hole_mask = mask.astype(np.uint8) * 255
     
-    # Label connected components
-    num_labels, labels = cv2.connectedComponents(invalid_mask.astype(np.uint8))
-    
-    # Fill small holes
-    for label in range(1, num_labels):
-        hole_mask = (labels == label)
-        hole_size = hole_mask.sum()
-        
-        if hole_size <= max_hole_size:
-            # Get surrounding valid values
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            dilated = cv2.dilate(hole_mask.astype(np.uint8), kernel)
-            border = (dilated > 0) & (disparity > 0)
-            
-            if border.any():
-                # Fill with median of surrounding values
-                fill_value = np.median(disparity[border])
-                filled[hole_mask] = fill_value
+    if method == 'inpaint':
+        # Use Telea or NS inpainting algorithm
+        filled = cv2.inpaint(filled.astype(np.float32), hole_mask, 
+                            kernel_size, cv2.INPAINT_TELEA)
+    elif method == 'nearest':
+        # Dilate valid regions to fill small holes
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+                                          (kernel_size, kernel_size))
+        # Create distance transform from valid pixels
+        dist = cv2.distanceTransform((~mask).astype(np.uint8), 
+                                     cv2.DIST_L2, 5)
+        # Fill with nearest valid neighbor
+        for _ in range(kernel_size):
+            dilated = cv2.dilate(filled, kernel)
+            filled = np.where(mask, dilated, filled)
     
     return filled
 
-
-@jit(nopython=True, parallel=True, fastmath=True)
-def confidence_map(disparity_left, disparity_right, threshold=1.0):
+def postprocess_disparity(disparity, **kwargs):
     """
-    Compute confidence map based on left-right consistency check.
-    Parallelized using Numba for faster processing.
-    
-    Parameters:
-    -----------
-    disparity_left : np.ndarray
-        Disparity from left image
-    disparity_right : np.ndarray
-        Disparity from right image
-    threshold : float
-        Maximum allowed disparity difference
-    
-    Returns:
-    --------
-    confidence : np.ndarray
-        Confidence map (0=low, 1=high)
-    """
-    h, w = disparity_left.shape
-    confidence = np.zeros_like(disparity_left)
-    
-    for y in prange(h):  # Parallel loop over rows
-        for x in range(w):
-            d_left = disparity_left[y, x]
-            if d_left <= 0:
-                continue
-            
-            # Find corresponding point in right image
-            x_right = int(x - d_left)
-            if 0 <= x_right < w:
-                d_right = disparity_right[y, x_right]
-                # Check consistency
-                if abs(d_left - d_right) < threshold:
-                    confidence[y, x] = 1.0
-    
-    return confidence
-
-
-def postprocess_disparity(disparity, left_image=None, method='fast', **kwargs):
-    """
-    Apply post-processing to disparity map with optimized pipeline.
-    
-    Processing Modes:
-    - 'fast': Lightweight pipeline (~20-50ms) - speckle + 3x3 median (DEFAULT)
-    - 'minimal': Speckle filtering only (~5-10ms) - fastest option
-    - 'quality': Full pipeline with bilateral filter (slower, higher quality)
-    - Individual filters: 'bilateral', 'median', 'speckle', 'fill'
-    
+    Apply a series of post-processing steps to refine the disparity map.
     Parameters:
     -----------
     disparity : np.ndarray
         Input disparity map
-    left_image : np.ndarray, optional
-        Left image for guided filtering (not used currently)
-    method : str
-        Post-processing method: 'fast', 'minimal', 'quality', 'bilateral', 'median', 'speckle', 'fill'
-        Default: 'fast' (optimized for speed)
     **kwargs : dict
-        Additional parameters for specific methods:
-        - max_speckle_size : int (default: 50 for fast/minimal, 100 for quality)
-        - max_diff : float (default: 1)
-        - d : int (default: 9)
-        - sigma_color : float (default: 75)
-        - sigma_space : float (default: 75)
-        - kernel_size : int (default: 3 for fast, 5 for others)
-        - max_hole_size : int (default: 10)
-        - combine_method : str (default: 'weighted_average')
-          Options: 'weighted_average', 'median', 'average'
-        - w_speckle : float (default: 0.2)
-        - w_bilateral : float (default: 0.5)
-        - w_median : float (default: 0.3)
+        Additional parameters for post-processing steps:
+        - max_speckle_size: int (default: 50)
+        - max_diff: float (default: 1)
+        - outlier_threshold: float (default: 3.0)
+        - outlier_kernel: int (default: 5)
+        - fill_method: str (default: 'inpaint')
+        - fill_kernel: int (default: 5)
+        - apply_outlier_removal: bool (default: True)
+        - apply_hole_filling: bool (default: True)
     
     Returns:
     --------
-    processed : np.ndarray
-        Post-processed disparity map
+    refined_disparity : np.ndarray
     """
+        
+    # Step 1: Quick speckle removal
+    result = filter_speckles(
+        disparity.copy(),
+        kwargs.get('max_speckle_size', 50),
+        kwargs.get('max_diff', 1)
+    )
     
-    if method == 'fast':
-        # === FAST PIPELINE: Speckle + 3x3 Median (~20-50ms) ===
-        print("Running fast post-processing pipeline...")
-        
-        # Step 1: Quick speckle removal
-        print("  [1/2] Speckle filtering...")
-        result = filter_speckles(
-            disparity.copy(),
-            kwargs.get('max_speckle_size', 50),
-            kwargs.get('max_diff', 1)
+    # Step 2: Outlier detection and masking
+    if kwargs.get('apply_outlier_removal', True):
+        outlier_mask = detect_outliers(
+            result,
+            threshold=kwargs.get('outlier_threshold', 3.0),
+            kernel_size=kwargs.get('outlier_kernel', 5)
         )
-        
-        # Step 2: Fast 3x3 median filter (Numba-parallelized)
-        print("  [2/2] 3x3 Median filtering...")
-        output = np.zeros_like(result, dtype=np.float32)
-        _median_filter_3x3_numba(result.astype(np.float32), output)
-        
-        print("✓ Fast post-processing complete!")
-        return output
+        # Set outliers to zero (invalid)
+        result[outlier_mask] = 0
     
-    elif method == 'minimal':
-        # === MINIMAL PIPELINE: Speckle only (~5-10ms) ===
-        print("Running minimal post-processing (speckle only)...")
-        result = filter_speckles(
-            disparity.copy(),
-            kwargs.get('max_speckle_size', 50),
-            kwargs.get('max_diff', 1)
+    # Step 3: Hole filling
+    if kwargs.get('apply_hole_filling', True):
+        result = fill_holes(
+            result,
+            method=kwargs.get('fill_method', 'inpaint'),
+            kernel_size=kwargs.get('fill_kernel', 5)
         )
-        print("✓ Minimal post-processing complete!")
-        return result
     
-    elif method == 'quality':
-        # === QUALITY PIPELINE: Full processing with all filters (slower) ===
-        print("Running quality post-processing pipeline...")
-        
-        # Filter 1: Remove small isolated regions
-        print("  [1/4] Speckle filtering...")
-        result_speckle = filter_speckles(
-            disparity.copy(),
-            kwargs.get('max_speckle_size', 100),
-            kwargs.get('max_diff', 1)
-        )
-        
-        # Filter 2: Edge-preserving smoothing (Numba-parallelized)
-        print("  [2/4] Bilateral filtering...")
-        result_bilateral = apply_bilateral_filter(
-            disparity.copy(),
-            kwargs.get('d', 9),
-            kwargs.get('sigma_color', 75),
-            kwargs.get('sigma_space', 75),
-            use_numba=True
-        )
-        
-        # Filter 3: Noise removal (Numba-parallelized)
-        print("  [3/4] Median filtering...")
-        result_median = median_filter(
-            disparity.copy(),
-            kwargs.get('kernel_size', 5),
-            use_numba=True
-        )
-        
-        print("✓ All independent filters completed!")
-        
-        # Combine the results
-        combine_method = kwargs.get('combine_method', 'weighted_average')
-        
-        if combine_method == 'weighted_average':
-            # Weighted average: prioritize bilateral (best edge preservation)
-            w_speckle = kwargs.get('w_speckle', 0.2)
-            w_bilateral = kwargs.get('w_bilateral', 0.5)
-            w_median = kwargs.get('w_median', 0.3)
-            
-            processed = (w_speckle * result_speckle + 
-                        w_bilateral * result_bilateral + 
-                        w_median * result_median)
-        
-        elif combine_method == 'median':
-            # Median of three results (most robust to outliers)
-            stacked = np.stack([result_speckle, result_bilateral, result_median])
-            processed = np.median(stacked, axis=0).astype(np.float32)
-        
-        else:  # 'average'
-            # Simple average
-            processed = (result_speckle + result_bilateral + result_median) / 3.0
-        
-        # Apply hole filling
-        print("  [4/4] Hole filling (Numba-parallelized)...")
-        max_hole_size = kwargs.get('max_hole_size', 10)
-        processed = fill_holes(processed, max_hole_size, use_numba=True)
-        print("✓ Quality post-processing complete!")
-        
-        return processed
-    
-    else:
-        # Single filter mode (no parallelization needed)
-        processed = disparity.copy()
-        
-        if method == 'speckle':
-            max_speckle_size = kwargs.get('max_speckle_size', 100)
-            max_diff = kwargs.get('max_diff', 1)
-            processed = filter_speckles(processed, max_speckle_size, max_diff)
-        
-        elif method == 'bilateral':
-            d = kwargs.get('d', 9)
-            sigma_color = kwargs.get('sigma_color', 75)
-            sigma_space = kwargs.get('sigma_space', 75)
-            processed = apply_bilateral_filter(processed, d, sigma_color, sigma_space)
-        
-        elif method == 'median':
-            kernel_size = kwargs.get('kernel_size', 5)
-            processed = median_filter(processed, kernel_size)
-        
-        elif method == 'fill':
-            max_hole_size = kwargs.get('max_hole_size', 10)
-            processed = fill_holes(processed, max_hole_size)
-        
-        return processed
+    # Step 4: Fast 3x3 median filter
+    output = cv2.medianBlur(result.astype(np.float32), 3)
 
-
-def enhance_disparity_map(disparity, clip_percentile=1):
-    """
-    Enhance disparity map visualization by clipping outliers.
-    
-    Parameters:
-    -----------
-    disparity : np.ndarray
-        Input disparity map
-    clip_percentile : float
-        Percentile for clipping (1-99)
-    
-    Returns:
-    --------
-    enhanced : np.ndarray
-        Enhanced disparity map
-    """
-    valid_mask = disparity > 0
-    if not valid_mask.any():
-        return disparity
-    
-    valid_values = disparity[valid_mask]
-    vmin = np.percentile(valid_values, clip_percentile)
-    vmax = np.percentile(valid_values, 100 - clip_percentile)
-    
-    enhanced = np.clip(disparity, vmin, vmax)
-    return enhanced
+    return output

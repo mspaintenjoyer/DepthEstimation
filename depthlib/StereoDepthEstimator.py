@@ -35,6 +35,8 @@ class StereoDepthEstimator:
             Path to calibration file
         """
 
+        if downscale_factor <= 0 or downscale_factor > 1.0:
+            raise ValueError("downscale_factor must be between 0 and 1.")
         self.downscale_factor = downscale_factor
         self.left_source, self.right_source = load_stereo_pair(left_source, right_source, downscale_factor=downscale_factor)
         self.device = device
@@ -126,10 +128,6 @@ class StereoDepthEstimator:
         for key in kwargs:
             if key not in valid_params:
                 raise ValueError(f"Invalid parameter '{key}'. Valid parameters: {list(valid_params)}")
-        
-        # Validate num_disp is divisible by 16
-        if 'num_disp' in kwargs and kwargs['num_disp'] > 280:
-            raise ValueError(f"num_disp must be divisible by 16, got {kwargs['num_disp']}")
 
         # Scale parameters by downscale factor if needed
         if 'num_disp' in kwargs:
@@ -204,7 +202,7 @@ class StereoDepthEstimator:
         np.ndarray : Depth map in meters. Invalid regions are set to inf
         """
         # Adjust disparity by offset before depth calculation
-        adjusted_disp = disp - doffs
+        adjusted_disp = disp + doffs
         
         # Calculate depth, using inf for invalid disparities
         Z = np.full_like(disp, np.inf, dtype=np.float32)
@@ -268,25 +266,34 @@ class StereoDepthEstimator:
         # Step 2: Compute disparity from rectified images
         disparity_px = self.compute_disparity(self.left_rectified, self.right_rectified)
 
+        # num_disp = self.sgbm_params.get('num_disp', 128)
+        # min_disp = self.sgbm_params.get('min_disp', 0)
+        # crop_width = num_disp + min_disp
+        
+        # # Crop disparity map
+        # disparity_px = disparity_px[:, crop_width:]
+        
+        # # Also crop the rectified images for visualization consistency
+        # self.left_rectified = self.left_rectified[:, crop_width:]
+        # self.right_rectified = self.right_rectified[:, crop_width:]
+
         # Step 3: Post-process disparity
         disparity_px = postprocess_disparity(
             disparity_px,
             left_image=self.left_rectified,
-            method='all',
-            max_speckle_size=100,
+            max_speckle_size=int(100*self.downscale_factor),
             max_diff=1.0,
-            d=9,
-            sigma_color=75,
-            sigma_space=75,
-            kernel_size=5,
-            max_hole_size=10
+            outlier_threshold=2.5,
+            fill_method='inpaint',
+            apply_outlier_removal=False,
+            apply_hole_filling=False
         )
 
         # Step 4: Compute depth if calibration data available
         f_pixels = self.sgbm_params.get('focal_length', None)
         baseline_m = self.sgbm_params.get('baseline', None)
         doffs = self.sgbm_params.get('doffs', 0.0)
-        min_disparity = self.sgbm_params.get('min_disp', 0.1)
+        min_disparity = self.sgbm_params.get('min_disp', 5.0)
         max_depth = self.sgbm_params.get('max_depth')
         
         depth_m = None
