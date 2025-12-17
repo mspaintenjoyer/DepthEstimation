@@ -1,11 +1,7 @@
-from depthlib.StereoDepthEstimator import StereoDepthEstimator
-from depthlib.visualizations import (visualize_stereo_pair, visualize_disparity, 
-                            visualize_depth, visualize_disparity_and_depth)
+"""
+Minimal public API for the stereo depth library.
+"""
 
-__all__ = [
-    'StereoDepthEstimator',
-    'visualize_stereo_pair',
-    'visualize_disparity',
-    'visualize_depth',
-    'visualize_disparity_and_depth',
-]
+from .StereoDepthEstimator import StereoDepthEstimator
+
+__all__ = ["StereoDepthEstimator"]

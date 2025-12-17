@@ -1,35 +1,63 @@
-"""Input utilities for loading stereo image pairs."""
+"""
+Input utilities: loading stereo image pairs.
+"""
+
+from pathlib import Path
+from typing import Tuple, Union
 
 import cv2
+import numpy as np
 
 
-def load_stereo_pair(left_image_path, right_image_path):
+def load_image(path: Union[str, Path], downscale_factor: float = 1.0) -> np.ndarray:
     """
-    Load a stereo image pair from file paths.
-    
-    Parameters:
-    -----------
-    left_image_path : str
-        Path to the left image
-    right_image_path : str
-        Path to the right image
-    
-    Returns:
-    --------
-    left_img_rgb : np.ndarray
-        Left image in RGB format
-    right_img_rgb : np.ndarray
-        Right image in RGB format
+    Load an image as BGR uint8 and optionally downscale.
+
+    Parameters
+    ----------
+    path : str or Path
+        Image file path.
+    downscale_factor : float
+        Factor in (0, 1]. Values < 1 downscale the image.
+
+    Returns
+    -------
+    img : np.ndarray
+        Loaded image (H x W x 3, BGR, uint8).
     """
-    # Load images
-    left_img = cv2.imread(left_image_path)
-    right_img = cv2.imread(right_image_path)
+    path = Path(path)
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if img is None:
+        raise FileNotFoundError(f"Could not read image: {path}")
 
-    if left_img is None or right_img is None:
-        raise FileNotFoundError("One or both image paths are invalid.")
+    if downscale_factor != 1.0:
+        h, w = img.shape[:2]
+        new_size = (int(w * downscale_factor), int(h * downscale_factor))
+        img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
 
-    # Convert from BGR (OpenCV default) to RGB for Matplotlib display
-    left_img_rgb = cv2.cvtColor(left_img, cv2.COLOR_BGR2RGB)
-    right_img_rgb = cv2.cvtColor(right_img, cv2.COLOR_BGR2RGB)
+    return img
 
-    return left_img_rgb, right_img_rgb
+
+def load_stereo_pair(
+    left_source: Union[str, Path],
+    right_source: Union[str, Path],
+    downscale_factor: float = 1.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Load a stereo pair as BGR images with optional downscaling.
+
+    Parameters
+    ----------
+    left_source, right_source : str or Path
+        Left/right image paths.
+    downscale_factor : float
+        Downscale factor for both images.
+
+    Returns
+    -------
+    left_img, right_img : np.ndarray
+        Loaded left and right images (BGR, uint8).
+    """
+    left = load_image(left_source, downscale_factor)
+    right = load_image(right_source, downscale_factor)
+    return left, right
