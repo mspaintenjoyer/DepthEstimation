@@ -1,22 +1,28 @@
 import depthlib
 import time
+import numpy as np
 
 if __name__ == "__main__":
-    left_image_path = './assets/im0.png'
-    right_image_path = './assets/im1.png'
+    left_image_path = './assets/video_frame/left.png'
+    right_image_path = './assets/video_frame/right.png'
 
-    ndisp = 280
-    focal_length = 3997.684
-    baseline_mm = 193.001
-    doffs = 131.111
+    # ndisp = 280
+    # focal_length = 3997.684
+    # baseline_mm = 193.001
+    # doffs = 131.111
+
+    ndisp = 128
+    focal_length = 679.01
+    baseline_mm = 572.5
+    doffs = 0
 
     # Using StereoDepthEstimator
-    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)
+    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=1.0)
     estimator.configure_sgbm(
         num_disp=ndisp,
         focal_length=focal_length,
         baseline=baseline_mm / 1000.0,
-        doffs=doffs
+        doffs=doffs,
     )
     start_time = time.time()
 

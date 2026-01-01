@@ -12,11 +12,11 @@ class StereoDepthEstimator:
     '''Class for estimating depth from stereo images/videos.'''
 
     def __init__(
-            self,
-            left_source, # Path to left image/video or camera index
-            right_source, # Path to right image/video or camera index
-            downscale_factor=1.0,
-            device='cpu', # 'cpu' or 'cuda'
+        self,
+        left_source=None, # Path to left image/video or camera index, or None for streaming
+        right_source=None, # Path to right image/video or camera index, or None for streaming
+        downscale_factor=1.0,
+        device='cpu', # 'cpu' or 'cuda'
     ):
         """
         Initialize the StereoDepthEstimator.
@@ -38,7 +38,10 @@ class StereoDepthEstimator:
         if downscale_factor <= 0 or downscale_factor > 1.0:
             raise ValueError("downscale_factor must be between 0 and 1.")
         self.downscale_factor = downscale_factor
-        self.left_source, self.right_source = load_stereo_pair(left_source, right_source, downscale_factor=downscale_factor)
+        self.left_source = None
+        self.right_source = None
+        if left_source is not None and right_source is not None:
+            self.left_source, self.right_source = load_stereo_pair(left_source, right_source, downscale_factor=downscale_factor)
         self.device = device
         
         # Store rectified images
@@ -63,6 +66,10 @@ class StereoDepthEstimator:
             'cam_matrix_R': None,
             'image_width': None,
             'image_height': None,
+            'dist_coeff_L': None,
+            'dist_coeff_R': None,
+            'rotation': None,
+            'translation': None,
         }
         
         # Initialize SGBM matcher
@@ -70,6 +77,76 @@ class StereoDepthEstimator:
         self._build_sgbm()
         self.disparity_map = None
         self.depth_map = None
+
+    def _prepare_rectified(self, left_img: np.ndarray, right_img: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Rectify if calibration exists, otherwise ensure grayscale."""
+        cam_matrix_L = self.sgbm_params.get('cam_matrix_L')
+        cam_matrix_R = self.sgbm_params.get('cam_matrix_R')
+        baseline = self.sgbm_params.get('baseline')
+        img_width = self.sgbm_params.get('image_width')
+        img_height = self.sgbm_params.get('image_height')
+        dist_L = self.sgbm_params.get('dist_coeff_L')
+        dist_R = self.sgbm_params.get('dist_coeff_R')
+        rotation = self.sgbm_params.get('rotation')
+        translation = self.sgbm_params.get('translation')
+
+        if all(v is not None for v in [cam_matrix_L, cam_matrix_R, baseline, img_width, img_height]):
+            left_rectified, right_rectified = rectify_images(
+                left_img,
+                right_img,
+                cam_matrix_L,  # type: ignore
+                cam_matrix_R,  # type: ignore
+                baseline,  # type: ignore
+                img_width,  # type: ignore
+                img_height,  # type: ignore
+                dist_coeff_L=dist_L,
+                dist_coeff_R=dist_R,
+                rotation=rotation,
+                translation=translation,
+                alpha=1.0,
+            )
+            return left_rectified, right_rectified
+
+        # No calibration: convert to grayscale if needed
+        if left_img.ndim == 3:
+            left_img = cv2.cvtColor(left_img, cv2.COLOR_BGR2GRAY)
+        if right_img.ndim == 3:
+            right_img = cv2.cvtColor(right_img, cv2.COLOR_BGR2GRAY)
+        return left_img, right_img
+
+    def _process_pair(self, left_img: np.ndarray, right_img: np.ndarray) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """Full pipeline for a single stereo pair (rectified input)."""
+        disparity_px = self.compute_disparity(left_img, right_img)
+
+        # crop the left invalid band
+        disparity_px = disparity_px[:, self.sgbm_params['num_disp']:]
+
+        disparity_px = postprocess_disparity(
+            disparity_px,
+            left_image=left_img,
+            max_speckle_size=int(100*self.downscale_factor),
+            max_diff=1.0,
+            outlier_threshold=2.5,
+            fill_method='inpaint',
+            apply_outlier_removal=True,
+            apply_hole_filling=True
+        )
+
+        f_pixels = self.sgbm_params.get('focal_length', None)
+        baseline_m = self.sgbm_params.get('baseline', None)
+        doffs = self.sgbm_params.get('doffs', 0.0)
+        min_disparity = self.sgbm_params.get('min_disp', 5.0)
+        max_depth = self.sgbm_params.get('max_depth')
+        depth_m = None
+        if f_pixels is not None and baseline_m is not None:
+            depth_m = self.disparity_to_depth(
+                disparity_px, f_pixels, baseline_m, doffs,
+                eps=min_disparity, max_depth=max_depth
+            )
+
+        self.disparity_map = disparity_px
+        self.depth_map = depth_m
+        return disparity_px, depth_m
     
     def _build_sgbm(self):
         """
@@ -227,87 +304,19 @@ class StereoDepthEstimator:
             - disparity_px : Disparity map in pixels (float32)
             - depth_m : Depth map in meters (float32) or None if calibration unavailable
         """
-        if not hasattr(self, 'left_source') or not hasattr(self, 'right_source'):
+        if self.left_source is None or self.right_source is None:
             raise ValueError("Left and right sources must be set before estimating depth.")
-        
-        # Step 1: Rectify images if calibration data is available
-        cam_matrix_L = self.sgbm_params.get('cam_matrix_L')
-        cam_matrix_R = self.sgbm_params.get('cam_matrix_R')
-        baseline = self.sgbm_params.get('baseline')
-        img_width = self.sgbm_params.get('image_width')
-        img_height = self.sgbm_params.get('image_height')
-        
-        if all(v is not None for v in [cam_matrix_L, cam_matrix_R, baseline, img_width, img_height]):
-            # Rectify images
-            # Type assertions safe here due to the all() check above
-            self.left_rectified, self.right_rectified = rectify_images(
-                self.left_source,
-                self.right_source,
-                cam_matrix_L,  # type: ignore
-                cam_matrix_R,  # type: ignore
-                baseline,  # type: ignore
-                img_width,  # type: ignore
-                img_height,  # type: ignore
-                alpha=1.0  # Keep all pixels to maintain full image (may include black borders)
-            )
-        else:
-            # If no calibration data, assume images are already rectified
-            # Convert to grayscale if needed
-            if self.left_source.ndim == 3:
-                self.left_rectified = cv2.cvtColor(self.left_source, cv2.COLOR_BGR2GRAY)
-            else:
-                self.left_rectified = self.left_source
-                
-            if self.right_source.ndim == 3:
-                self.right_rectified = cv2.cvtColor(self.right_source, cv2.COLOR_BGR2GRAY)
-            else:
-                self.right_rectified = self.right_source
-        
-        # Step 2: Compute disparity from rectified images
-        disparity_px = self.compute_disparity(self.left_rectified, self.right_rectified)
 
-        # num_disp = self.sgbm_params.get('num_disp', 128)
-        # min_disp = self.sgbm_params.get('min_disp', 0)
-        # crop_width = num_disp + min_disp
-        
-        # # Crop disparity map
-        # disparity_px = disparity_px[:, crop_width:]
-        
-        # # Also crop the rectified images for visualization consistency
-        # self.left_rectified = self.left_rectified[:, crop_width:]
-        # self.right_rectified = self.right_rectified[:, crop_width:]
-
-        # Step 3: Post-process disparity
-        disparity_px = postprocess_disparity(
-            disparity_px,
-            left_image=self.left_rectified,
-            max_speckle_size=int(100*self.downscale_factor),
-            max_diff=1.0,
-            outlier_threshold=2.5,
-            fill_method='inpaint',
-            apply_outlier_removal=False,
-            apply_hole_filling=False
+        self.left_rectified, self.right_rectified = self._prepare_rectified(
+            self.left_source, self.right_source
         )
 
-        # Step 4: Compute depth if calibration data available
-        f_pixels = self.sgbm_params.get('focal_length', None)
-        baseline_m = self.sgbm_params.get('baseline', None)
-        doffs = self.sgbm_params.get('doffs', 0.0)
-        min_disparity = self.sgbm_params.get('min_disp', 5.0)
-        max_depth = self.sgbm_params.get('max_depth')
-        
-        depth_m = None
-        if f_pixels is not None and baseline_m is not None:
-            depth_m = self.disparity_to_depth(
-                disparity_px, f_pixels, baseline_m, doffs,
-                eps=min_disparity, max_depth=max_depth
-            )
-        
+        return self._process_pair(self.left_rectified, self.right_rectified)
 
-        self.disparity_map = disparity_px
-        self.depth_map = depth_m
-
-        return disparity_px, depth_m
+    def estimate_depth_frame(self, left_frame: np.ndarray, right_frame: np.ndarray) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """Estimate depth for a single stereo frame pair (streaming-friendly)."""
+        self.left_rectified, self.right_rectified = self._prepare_rectified(left_frame, right_frame)
+        return self._process_pair(self.left_rectified, self.right_rectified)
     
     def visualize_results(self):
         """
