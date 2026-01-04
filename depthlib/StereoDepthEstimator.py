@@ -188,6 +188,7 @@ class StereoDepthEstimator:
         disparity_R = dispR_fixed.astype(np.float32) / 16.0
 
         disparity_px = postprocess_disparity(
+<<<<<<< HEAD
         disparity_L,
         disparity_R=disparity_R,
         apply_lr_consistency=True,
@@ -195,6 +196,32 @@ class StereoDepthEstimator:
         apply_speckle_filter=True,
         apply_fill_from_right=False,
         invalidate_value=-1.0,
+=======
+            disparity_px,
+            apply_fill_from_right=True,
+            invalidate_value=-1.0,
+        # num_disp = self.sgbm_params.get('num_disp', 128)
+        # min_disp = self.sgbm_params.get('min_disp', 0)
+        # crop_width = num_disp + min_disp
+        
+        # # Crop disparity map
+        # disparity_px = disparity_px[:, crop_width:]
+        
+        # # Also crop the rectified images for visualization consistency
+        # self.left_rectified = self.left_rectified[:, crop_width:]
+        # self.right_rectified = self.right_rectified[:, crop_width:]
+
+        # Step 3: Post-process disparity
+        disparity_px = postprocess_disparity(
+            disparity_px,
+            left_image=self.left_rectified,
+            max_speckle_size=int(100*self.downscale_factor),
+            max_diff=1.0,
+            outlier_threshold=2.5,
+            fill_method='inpaint',
+            apply_outlier_removal=False,
+            apply_hole_filling=False
+>>>>>>> 146d298705c920a875d3a96b053b2499515f26f4
         )
 
         # --- ROI crop to remove invalid left band ---
@@ -211,9 +238,20 @@ class StereoDepthEstimator:
         max_depth = self.sgbm_params.get("max_depth")
 
         depth_m: Optional[np.ndarray] = None
+<<<<<<< HEAD
         if depth_m is not None:
             depth_m = depth_m[:, x0:x1]
 
+=======
+        # Step 4: Compute depth if calibration data available
+        f_pixels = self.sgbm_params.get('focal_length', None)
+        baseline_m = self.sgbm_params.get('baseline', None)
+        doffs = self.sgbm_params.get('doffs', 0.0)
+        min_disparity = self.sgbm_params.get('min_disp', 5.0)
+        max_depth = self.sgbm_params.get('max_depth')
+        
+        depth_m = None
+>>>>>>> 146d298705c920a875d3a96b053b2499515f26f4
         if f_pixels is not None and baseline_m is not None:
             depth_m = self.disparity_to_depth(
                 disparity_px,
