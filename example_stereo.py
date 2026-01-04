@@ -1,6 +1,8 @@
 import time
 import numpy as np
 import depthlib
+from depthlib.calibration import load_middlebury_calib
+
 
 
 if __name__ == "__main__":
@@ -12,19 +14,18 @@ if __name__ == "__main__":
     baseline_mm = 193.001
     doffs = 131.111
 
-    estimator = depthlib.StereoDepthEstimator(
-        left_source=left_image_path,
-        right_source=right_image_path,
-        downscale_factor=0.5,
-    )
+    cal = load_middlebury_calib("./assets/calib.txt")
 
+    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)
     estimator.configure_sgbm(
-        num_disp=ndisp,
-        block_size=7,
-        uniqueness_ratio=5,
-        focal_length=focal_length,
-        baseline=baseline_mm / 1000.0,
-        doffs=doffs,
+        num_disp=cal.ndisp,
+        block_size=5,
+        uniqueness_ratio=10,
+        focal_length=float(cal.K0[0, 0]),
+        baseline=float(cal.baseline_m),
+        doffs=float(cal.doffs),
+        image_width=int(cal.width * 0.5),
+        image_height=int(cal.height * 0.5),
     )
 
     start_time = time.time()

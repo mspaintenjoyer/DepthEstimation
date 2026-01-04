@@ -154,8 +154,53 @@ def fill_left_band(
 
     return disp
 
+def lr_consistency_mask(disp_L: np.ndarray, disp_R: np.ndarray, thresh: float = 1.0) -> np.ndarray:
+    """
+    Returns mask (bool) where disparities are consistent.
+    disp_L: disparity from L->R (pixels)
+    disp_R: disparity from R->L (pixels)
+    """
+    H, W = disp_L.shape
+    xs = np.arange(W, dtype=np.int32)[None, :].repeat(H, axis=0)
+    ys = np.arange(H, dtype=np.int32)[:, None].repeat(W, axis=1)
 
-def postprocess_disparity(disparity: np.ndarray, **kwargs) -> np.ndarray:
+    dL = disp_L
+    xR = (xs - np.rint(dL).astype(np.int32))
+
+    valid = (dL > 0) & (xR >= 0) & (xR < W)
+    dR_sample = np.zeros_like(dL, dtype=np.float32)
+    dR_sample[valid] = disp_R[ys[valid], xR[valid]]
+
+    # Consistency: dL + dR ~= 0 (since disp_R is R->L)
+    ok = valid & (np.abs(dL + dR_sample) <= thresh)
+    return ok
+
+def compute_valid_roi(
+    disparity: np.ndarray,
+    invalid_value: float = -1.0,
+    min_valid_frac: float = 0.60,
+):
+    """
+    Compute a horizontal ROI [x0:x1) that excludes columns with too many invalids.
+    Returns (x0, x1). If ROI cannot be found, returns full width.
+    """
+    H, W = disparity.shape
+    valid = (disparity != invalid_value) & (disparity > 0)
+    col_frac = valid.mean(axis=0)  # fraction of rows valid per column
+
+    good = col_frac >= float(min_valid_frac)
+    if not good.any():
+        return 0, W
+
+    x0 = int(good.argmax())
+    x1 = int(W - good[::-1].argmax())
+    if x1 <= x0 + 8:  # avoid degenerate crops
+        return 0, W
+    return x0, x1
+
+
+def postprocess_disparity(disparity_L: np.ndarray, disparity_R: Optional[np.ndarray] = None, **kwargs) -> np.ndarray:
+
     """
     Minimal post-processing for disparity maps.
 
@@ -178,9 +223,24 @@ def postprocess_disparity(disparity: np.ndarray, **kwargs) -> np.ndarray:
         Refined disparity map.
     """
     invalid_value = kwargs.get("invalidate_value", -1.0)
-    result = disparity.copy()
+    result = disparity_L.copy().astype(np.float32)
 
+    # 1) LR consistency invalidation (preferred over band-fill)
+    if (disparity_R is not None) and kwargs.get("apply_lr_consistency", True):
+        ok = lr_consistency_mask(result, disparity_R, thresh=float(kwargs.get("lr_thresh", 1.0)))
+        result[~ok] = invalid_value
+
+    # 2) Speckle filtering on valid disparities
+    if kwargs.get("apply_speckle_filter", True):
+        tmp = result.copy()
+        tmp[tmp == invalid_value] = 0.0
+        tmp = filter_speckles(tmp, max_speckle_size=int(kwargs.get("max_speckle_size", 100)),max_diff=float(kwargs.get("max_diff", 1.0)))
+        # keep invalids invalid
+        result[result != invalid_value] = tmp[result != invalid_value]
+
+    # 3) Optional left-band fill (last resort)
     if kwargs.get("apply_fill_from_right", False):
         result = fill_left_band(result, invalid_value=invalid_value)
 
     return result
+

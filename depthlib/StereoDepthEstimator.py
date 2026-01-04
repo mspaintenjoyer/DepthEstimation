@@ -11,8 +11,8 @@ import numpy as np
 import time
 
 from .input import load_stereo_pair
-from .postprocess import postprocess_disparity
-from .rectify import rectify_images
+from .postprocess import postprocess_disparity, compute_valid_roi
+#from .rectify import rectify_images
 from .visualizations import visualize_disparity, visualize_depth
 
 
@@ -66,6 +66,7 @@ class StereoDepthEstimator:
         }
 
         self.sgbm: Optional[cv2.StereoSGBM] = None
+        self.sgbm_right: Optional[cv2.StereoSGBM] = None
         self._build_sgbm()
 
         self.disparity_map: Optional[np.ndarray] = None
@@ -92,6 +93,19 @@ class StereoDepthEstimator:
             speckleRange=int(params["speckle_range"]),
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
         )
+        self.sgbm_right = cv2.StereoSGBM_create(
+            minDisparity=-int(params["num_disp"]),   # allow negative for R->L
+            numDisparities=int(params["num_disp"]),
+            blockSize=bs,
+            P1=P1,
+            P2=P2,
+            disp12MaxDiff=int(params["disp12_max_diff"]),
+            preFilterCap=int(params["prefilter_cap"]),
+            uniquenessRatio=int(params["uniqueness_ratio"]),
+            speckleWindowSize=int(params["speckle_window_size"]),
+            speckleRange=int(params["speckle_range"]),
+            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
+        )
 
     def configure_sgbm(self, **kwargs) -> None:
         """
@@ -107,7 +121,9 @@ class StereoDepthEstimator:
                 raise ValueError(f"Invalid parameter '{key}'. Valid: {list(valid_params)}")
 
         if "num_disp" in kwargs:
-            kwargs["num_disp"] = int(kwargs["num_disp"] * self.downscale_factor)
+            nd = int(kwargs["num_disp"] * self.downscale_factor)
+            nd = max(16, (nd // 16) * 16)  # round down to multiple of 16
+            kwargs["num_disp"] = nd
         if "focal_length" in kwargs:
             kwargs["focal_length"] = kwargs["focal_length"] * self.downscale_factor
         if "doffs" in kwargs:
@@ -145,48 +161,47 @@ class StereoDepthEstimator:
         """
         Full pipeline: rectification (if calib), SGBM, post-process, depth (if calib).
         """
-        # Rectification or grayscale conversion
-        cam_matrix_L = self.sgbm_params.get("cam_matrix_L")
-        cam_matrix_R = self.sgbm_params.get("cam_matrix_R")
-        baseline = self.sgbm_params.get("baseline")
+        # Always convert to grayscale (Middlebury pairs are already rectified)
+        L = self.left_source
+        R = self.right_source
+
+        if L.ndim == 3:
+            L = cv2.cvtColor(L, cv2.COLOR_BGR2GRAY)
+        if R.ndim == 3:
+            R = cv2.cvtColor(R, cv2.COLOR_BGR2GRAY)
+
+        # Optional: enforce a known working resolution (from calib) if provided
         img_width = self.sgbm_params.get("image_width")
         img_height = self.sgbm_params.get("image_height")
+        if img_width is not None and img_height is not None:
+            L = cv2.resize(L, (int(img_width), int(img_height)), interpolation=cv2.INTER_AREA)
+            R = cv2.resize(R, (int(img_width), int(img_height)), interpolation=cv2.INTER_AREA)
 
-        if all(v is not None for v in [cam_matrix_L, cam_matrix_R, baseline, img_width, img_height]):
-            self.left_rectified, self.right_rectified = rectify_images(
-                self.left_source,
-                self.right_source,
-                cam_matrix_L,  # type: ignore
-                cam_matrix_R,  # type: ignore
-                baseline,      # type: ignore
-                img_width,     # type: ignore
-                img_height,    # type: ignore
-                alpha=1.0,
-            )
-        else:
-            if self.left_source.ndim == 3:
-                self.left_rectified = cv2.cvtColor(self.left_source, cv2.COLOR_BGR2GRAY)
-            else:
-                self.left_rectified = self.left_source
+        self.left_rectified = L
+        self.right_rectified = R
 
-            if self.right_source.ndim == 3:
-                self.right_rectified = cv2.cvtColor(self.right_source, cv2.COLOR_BGR2GRAY)
-            else:
-                self.right_rectified = self.right_source
 
-        t0 = time.time()
-        disparity_px = self.compute_disparity(self.left_rectified, self.right_rectified)
-        t1 = time.time()
+        disparity_L = self.compute_disparity(self.left_rectified, self.right_rectified)
+
+        # Right disparity (R->L). Note: uses sgbm_right directly because minDisparity differs.
+        dispR_fixed = self.sgbm_right.compute(self.right_rectified, self.left_rectified)  # type: ignore
+        disparity_R = dispR_fixed.astype(np.float32) / 16.0
 
         disparity_px = postprocess_disparity(
-            disparity_px,
-            apply_fill_from_right=True,
-            invalidate_value=-1.0,
+        disparity_L,
+        disparity_R=disparity_R,
+        apply_lr_consistency=True,
+        lr_thresh=1.0,
+        apply_speckle_filter=True,
+        apply_fill_from_right=False,
+        invalidate_value=-1.0,
         )
-        t2 = time.time()
 
-        print(f"SGBM only: {(t1 - t0) * 1000:.2f} ms")
-        print(f"postprocess only: {(t2 - t1) * 1000:.2f} ms")
+        # --- ROI crop to remove invalid left band ---
+        invalid_value = -1.0
+        x0, x1 = compute_valid_roi(disparity_px, invalid_value=invalid_value, min_valid_frac=0.60)
+        disparity_px = disparity_px[:, x0:x1]
+        # ------------------------------------------
 
         # Optional depth
         f_pixels = self.sgbm_params.get("focal_length", None)
@@ -196,6 +211,9 @@ class StereoDepthEstimator:
         max_depth = self.sgbm_params.get("max_depth")
 
         depth_m: Optional[np.ndarray] = None
+        if depth_m is not None:
+            depth_m = depth_m[:, x0:x1]
+
         if f_pixels is not None and baseline_m is not None:
             depth_m = self.disparity_to_depth(
                 disparity_px,
