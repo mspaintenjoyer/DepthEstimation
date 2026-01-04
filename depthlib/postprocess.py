@@ -1,9 +1,5 @@
 """
 Post-processing utilities for disparity maps.
-
-This version is intentionally minimal and fast:
-- Only left-border invalid band filling is enabled by default.
-- Speckle removal / inpainting helpers are kept for future use.
 """
 
 from typing import Optional
@@ -204,19 +200,6 @@ def postprocess_disparity(disparity_L: np.ndarray, disparity_R: Optional[np.ndar
     """
     Minimal post-processing for disparity maps.
 
-    Currently:
-    - Optionally fix left invalid band via fill_left_band.
-    - No speckle, outlier, inpaint or median steps are applied by default.
-
-    Parameters
-    ----------
-    disparity : np.ndarray
-        Input disparity map.
-    invalidate_value : float, optional
-        Code used for invalid disparities (default -1.0).
-    apply_fill_from_right : bool, optional
-        If True, apply left-band filling.
-
     Returns
     -------
     result : np.ndarray
@@ -225,7 +208,7 @@ def postprocess_disparity(disparity_L: np.ndarray, disparity_R: Optional[np.ndar
     invalid_value = kwargs.get("invalidate_value", -1.0)
     result = disparity_L.copy().astype(np.float32)
 
-    # 1) LR consistency invalidation (preferred over band-fill)
+    # 1) LR consistency invalidation 
     if (disparity_R is not None) and kwargs.get("apply_lr_consistency", True):
         ok = lr_consistency_mask(result, disparity_R, thresh=float(kwargs.get("lr_thresh", 1.0)))
         result[~ok] = invalid_value
@@ -238,7 +221,7 @@ def postprocess_disparity(disparity_L: np.ndarray, disparity_R: Optional[np.ndar
         # keep invalids invalid
         result[result != invalid_value] = tmp[result != invalid_value]
 
-    # 3) Optional left-band fill (last resort)
+    # 3) Optional left-band fill 
     if kwargs.get("apply_fill_from_right", False):
         result = fill_left_band(result, invalid_value=invalid_value)
 
