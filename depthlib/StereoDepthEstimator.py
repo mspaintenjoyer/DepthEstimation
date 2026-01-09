@@ -13,8 +13,8 @@ class StereoDepthEstimator:
 
     def __init__(
         self,
-        left_source=None, # Path to left image/video or camera index, or None for streaming
-        right_source=None, # Path to right image/video or camera index, or None for streaming
+        left_source=None, # Path to left image
+        right_source=None, # Path to right image
         downscale_factor=1.0,
         device='cpu', # 'cpu' or 'cuda'
     ):
@@ -70,6 +70,7 @@ class StereoDepthEstimator:
             'dist_coeff_R': None,
             'rotation': None,
             'translation': None,
+            'hole_filling': False,
         }
         
         # Initialize SGBM matcher
@@ -129,7 +130,7 @@ class StereoDepthEstimator:
             outlier_threshold=2.5,
             fill_method='inpaint',
             apply_outlier_removal=True,
-            apply_hole_filling=True
+            apply_hole_filling=self.sgbm_params.get('hole_filling', False)
         )
 
         f_pixels = self.sgbm_params.get('focal_length', None)
