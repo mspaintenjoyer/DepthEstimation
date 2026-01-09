@@ -49,6 +49,10 @@ def rectify_images(
 	baseline: float,
 	image_width: int,
 	image_height: int,
+	dist_coeff_L: np.ndarray | None = None,
+	dist_coeff_R: np.ndarray | None = None,
+	rotation: np.ndarray | None = None,
+	translation: np.ndarray | None = None,
 	alpha: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
 	"""Rectify a stereo image pair using calibration parameters.
@@ -69,6 +73,14 @@ def rectify_images(
 		Expected image width in pixels.
 	image_height : int
 		Expected image height in pixels.
+	dist_coeff_L : np.ndarray, optional
+		Distortion coefficients for left camera (k1, k2, p1, p2, k3).
+	dist_coeff_R : np.ndarray, optional
+		Distortion coefficients for right camera (k1, k2, p1, p2, k3).
+	rotation : np.ndarray, optional
+		3x3 rotation matrix from left to right camera.
+	translation : np.ndarray, optional
+		3x1 translation vector from left to right camera (meters).
 	alpha : float, optional
 		Free-scaling parameter (0.0-1.0). 0 crops to valid pixels only,
 		1 keeps all original pixels. Default is 0.0.
@@ -83,10 +95,11 @@ def rectify_images(
 	# Ensure matrices are float64
 	cam_mtx_L = np.asarray(cam_matrix_L, dtype=np.float64)
 	cam_mtx_R = np.asarray(cam_matrix_R, dtype=np.float64)
-	
-	# No distortion assumed
-	dist_L = np.zeros(5, dtype=np.float64)
-	dist_R = np.zeros(5, dtype=np.float64)
+
+	# Use provided distortion or default to zero-distortion
+	default_dist = np.zeros(5, dtype=np.float64)
+	dist_L = np.asarray(dist_coeff_L, dtype=np.float64) if dist_coeff_L is not None else default_dist
+	dist_R = np.asarray(dist_coeff_R, dtype=np.float64) if dist_coeff_R is not None else default_dist
 
 	image_size = (image_width, image_height)
 
@@ -94,10 +107,9 @@ def rectify_images(
 	img_L = _ensure_image_size(img_L, image_size)
 	img_R = _ensure_image_size(img_R, image_size)
 
-	# Assume cameras are translated along the x-axis by the baseline
-	# with no relative rotation (typical for stereo rigs)
-	rotation = np.eye(3, dtype=np.float64)
-	translation = np.array([-baseline, 0.0, 0.0], dtype=np.float64)
+	# Use provided extrinsics or fall back to canonical baseline along x-axis
+	R = np.asarray(rotation, dtype=np.float64) if rotation is not None else np.eye(3, dtype=np.float64)
+	T = np.asarray(translation, dtype=np.float64) if translation is not None else np.array([-baseline, 0.0, 0.0], dtype=np.float64)
 
 	# Compute stereo rectification
 	rect_L, rect_R, proj_L, proj_R, Q, roi_L, roi_R = cv2.stereoRectify(
@@ -106,8 +118,8 @@ def rectify_images(
 		cam_mtx_R,
 		dist_R,
 		image_size,
-		rotation,
-		translation,
+		R,
+		T,
 		flags=cv2.CALIB_ZERO_DISPARITY,
 		alpha=alpha,
 	)

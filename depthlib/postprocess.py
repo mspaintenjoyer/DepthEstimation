@@ -162,7 +162,7 @@ def postprocess_disparity(disparity, **kwargs):
         result = fill_holes(
             result,
             method=kwargs.get('fill_method', 'inpaint'),
-            kernel_size=kwargs.get('fill_kernel', 5)
+            kernel_size=kwargs.get('fill_kernel', 3)
         )
     
     # Step 4: Fast 3x3 median filter
