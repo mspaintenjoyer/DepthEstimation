@@ -1,6 +1,7 @@
 from depthlib.StereoDepthEstimator import StereoDepthEstimator
 from depthlib.input import stereo_stream
 from depthlib.visualizations import visualize_stereo_live
+from depthlib.stereo_core import StereoCore
 import cv2
 import time
 
@@ -24,30 +25,7 @@ class StereoDepthEstimatorVideo:
         self.visualize_live = visualize_live
         self.saving_path = saving_path
         
-        # SGBM parameters with defaults
-        self.sgbm_params = {
-            'min_disp': 0,
-            'num_disp': 128,
-            'block_size': 5,
-            'disp12_max_diff': 1,
-            'prefilter_cap': 31,
-            'uniqueness_ratio': 10,
-            'speckle_window_size': 50,
-            'speckle_range': 2,
-            'focal_length': None,
-            'baseline': None,
-            'doffs': 0.0,
-            'max_depth': None,
-            'cam_matrix_L': None,
-            'cam_matrix_R': None,
-            'image_width': None,
-            'image_height': None,
-            'dist_coeff_L': None,
-            'dist_coeff_R': None,
-            'rotation': None,
-            'translation': None,
-            'hole_filling': False,
-        }
+        self.core = StereoCore(downscale_factor=downscale_factor)
 
     def configure_sgbm(self, **kwargs):
         """
@@ -77,41 +55,21 @@ class StereoDepthEstimatorVideo:
         >>> estimator.configure_sgbm(num_disp=144, block_size=7)
         >>> estimator.configure_sgbm(min_disp=16, uniqueness_ratio=15)
         """
-        # Validate parameters
-        valid_params = self.sgbm_params.keys()
-        for key in kwargs:
-            if key not in valid_params:
-                raise ValueError(f"Invalid parameter '{key}'. Valid parameters: {list(valid_params)}")
-
-        # Scale parameters by downscale factor if needed
-        if 'num_disp' in kwargs:
-            kwargs['num_disp'] = int(kwargs['num_disp'] * self.downscale_factor)
-        if 'focal_length' in kwargs:
-            kwargs['focal_length'] = kwargs['focal_length'] * self.downscale_factor
-        if 'doffs' in kwargs:
-            kwargs['doffs'] = kwargs['doffs'] * self.downscale_factor
-        
-        # Update parameters
-        self.sgbm_params.update(kwargs)
+        self.core.configure_sgbm(**kwargs)
 
     def estimate_depth(self):
         '''Estimate depth from the stereo video streams.'''
         if self.left_source is None or self.right_source is None:
             raise ValueError("Both left_source and right_source must be provided for video depth estimation.")
-        estimator = StereoDepthEstimator(
-            left_source=None,
-            right_source=None,
-            downscale_factor=self.downscale_factor,
-            device=self.device,
-        )
-        estimator.configure_sgbm(**self.sgbm_params)
+
+        self.core.configure_sgbm(**self.core.get_sgbm_params())
 
         #Allow window resizing
         cv2.namedWindow("Depth (live)", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Depth (live)", 960, 540)
-        for idx, (left_frame, right_frame) in enumerate(stereo_stream(self.left_source, self.right_source, downscale_factor=self.downscale_factor)):
+        for left_frame, right_frame in stereo_stream(self.left_source, self.right_source, downscale_factor=self.downscale_factor):
             t0 = time.time()
-            disparity_px, depth_m = estimator.estimate_depth_frame(left_frame, right_frame)
+            disparity_px, depth_m = self.core.estimate_depth(left_frame, right_frame)
             fps = 1.0 / max(time.time() - t0, 1e-6)
 
             if self.visualize_live:
