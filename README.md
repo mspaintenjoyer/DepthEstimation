@@ -1,23 +1,32 @@
-# Setting Up Python Virtual Environment
+# Python Environment Setup
 
-To set up your Python environment for this project:
+Follow these steps to prepare the project environment:
 
-1. **Create a virtual environment**  
+1. **Create a virtual environment**
     ```bash
     python -m venv venv
     ```
 
-2. **Activate the virtual environment**  
-    - On Windows:
+2. **Activate the virtual environment**
+    - Windows
       ```bash
       venv\Scripts\activate
       ```
-    - On macOS/Linux:
+    - macOS/Linux
       ```bash
       source venv/bin/activate
       ```
 
-3. **Install required modules**  
+3. **Install dependencies**
     ```bash
     pip install -r requirements.txt
     ```
+    - CPU-only PyTorch
+      ```bash
+      pip install torch
+      ```
+    - CUDA PyTorch (pick the right CUDA wheel from PyTorch site)
+      ```bash
+      pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+      ```
+    See https://pytorch.org/get-started/locally/ to choose the correct CUDA version.
