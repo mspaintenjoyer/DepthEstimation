@@ -6,9 +6,15 @@ from depthlib.postprocess import postprocess_disparity
 
 class StereoCore:
     '''Handles common stereo operations.'''
-    def __init__(self, downscale_factor=1.0) -> None:
+    def __init__(self, downscale_factor=1.0, device='cpu') -> None:
         self.downscale_factor = downscale_factor
+        self.device = device
         self.sgbm = None
+        self.sgm_gpu = None
+
+        if device == 'cuda' and not cv2.cuda.getCudaEnabledDeviceCount():
+            raise RuntimeError("CUDA device not found or OpenCV not compiled with CUDA support.")
+
 
         # SGBM parameters with defaults
         self.sgbm_params = {

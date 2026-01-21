@@ -25,7 +25,7 @@ class StereoDepthEstimatorVideo:
         self.visualize_live = visualize_live
         self.saving_path = saving_path
         
-        self.core = StereoCore(downscale_factor=downscale_factor)
+        self.core = StereoCore(downscale_factor=downscale_factor, device=device)
 
     def configure_sgbm(self, **kwargs):
         """

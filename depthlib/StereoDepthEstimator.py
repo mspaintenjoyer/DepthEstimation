@@ -35,7 +35,7 @@ class StereoDepthEstimator:
             raise ValueError("downscale_factor must be between 0 and 1.")
         self.downscale_factor = downscale_factor
 
-        self.core = StereoCore(downscale_factor=downscale_factor)
+        self.core = StereoCore(downscale_factor=downscale_factor, device=device)
 
         self.left_source = None
         self.right_source = None
