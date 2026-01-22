@@ -3,6 +3,9 @@ import numpy as np
 from typing import Tuple, Optional, Dict
 from depthlib.rectify import rectify_images
 from depthlib.postprocess import postprocess_disparity
+import os
+os.add_dll_directory(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin")
+import sgm_cuda
 
 class StereoCore:
     '''Handles common stereo operations.'''
@@ -12,8 +15,8 @@ class StereoCore:
         self.sgbm = None
         self.sgm_gpu = None
 
-        if device == 'cuda' and not cv2.cuda.getCudaEnabledDeviceCount():
-            raise RuntimeError("CUDA device not found or OpenCV not compiled with CUDA support.")
+        # if device == 'cuda' and not cv2.cuda.getCudaEnabledDeviceCount():
+        #     raise RuntimeError("CUDA device not found or OpenCV not compiled with CUDA support.")
 
 
         # SGBM parameters with defaults
@@ -154,7 +157,11 @@ class StereoCore:
 
     def _process_pair(self, left_img: np.ndarray, right_img: np.ndarray) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """Full pipeline for a single stereo pair (rectified input)."""
-        disparity_px = self.compute_disparity(left_img, right_img)
+
+        if self.device == 'cuda':
+            disparity_px = self.compute_disparity_cuda(left_img, right_img)
+        else:
+            disparity_px = self.compute_disparity(left_img, right_img)
 
         # crop the left invalid band
         disparity_px = disparity_px[:, self.sgbm_params['num_disp']:]
@@ -218,6 +225,24 @@ class StereoCore:
         disp_fixed = self.sgbm.compute(rectified_L, rectified_R) # type: ignore
         return disp_fixed.astype(np.float32) / 16.0
     
+    def compute_disparity_cuda(self, rectified_L: np.ndarray, 
+                              rectified_R: np.ndarray) -> np.ndarray:
+        """
+        Compute disparity map using CUDA from rectified stereo images.
+        Parameters:
+        -----------
+        rectified_L : np.ndarray
+            Rectified left image (grayscale)
+        rectified_R : np.ndarray
+            Rectified right image (grayscale)
+        Returns:
+        --------
+        np.ndarray : Disparity map in pixels (float32)
+        """
+        ndisp = 128
+        disp = sgm_cuda.compute(rectified_L, rectified_R, ndisp)
+        return disp.astype(np.float32)
+
     def disparity_to_depth(self, disp: np.ndarray, f_pixels: float, 
                           baseline_m: float, doffs: float = 0.0, 
                           eps: float = 1e-6, max_depth: Optional[float] = None) -> np.ndarray:

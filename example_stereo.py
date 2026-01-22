@@ -17,7 +17,8 @@ if __name__ == "__main__":
     # doffs = 0
 
     # Using StereoDepthEstimator
-    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)
+    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, 
+                                              downscale_factor=0.5, device='cuda')
     estimator.configure_sgbm(
         num_disp=ndisp,
         focal_length=focal_length,

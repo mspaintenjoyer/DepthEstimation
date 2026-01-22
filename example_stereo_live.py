@@ -27,6 +27,7 @@ def main():
         right_source=right_src,
         downscale_factor=downscale,
         visualize_live=True,
+        # device='cuda',
     )
     estimator.configure_sgbm(
         num_disp=ndisp,
