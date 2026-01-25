@@ -178,7 +178,7 @@ def visualize_disparity_and_depth(disparity_px, depth_m, left_img=None):
     plt.tight_layout()
     plt.show()
 
-def visualize_stereo_live(depth_m, fps):
+def visualize_depth_live(depth_m, fps):
     """Visualize depth map in a live setting with FPS overlay."""
     if depth_m is None:
         print("Warning: Depth map is None. Cannot visualize.")
@@ -198,6 +198,30 @@ def visualize_stereo_live(depth_m, fps):
 
         depth_norm_inv = 255 - depth_norm  # flip so nearer = hotter (red/yellow)
         depth_vis = cv2.applyColorMap(depth_norm_inv, cv2.COLORMAP_TURBO)
+        cv2.putText(depth_vis, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(depth_vis, f"Display cap: {display_max_depth_m:.0f} m", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    else:
+        depth_vis = np.zeros((*depth_m.shape, 3), dtype=np.uint8)
+        cv2.putText(depth_vis, "No valid depth", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
+
+    cv2.imshow("Depth (live)", depth_vis)
+
+def visualize_depth_live_gray(depth_m, fps):
+    """Visualize depth map in grayscale in a live setting with FPS overlay."""
+    if depth_m is None:
+        print("Warning: Depth map is None. Cannot visualize.")
+        return
+
+    valid_depth = np.isfinite(depth_m) & (depth_m > 0)
+
+    if valid_depth.any():
+        display_max_depth_m = 50.0
+        depth_clipped = np.clip(depth_m, 0, display_max_depth_m)
+        depth_clipped[~valid_depth] = display_max_depth_m  # send invalid to far (dark)
+        depth_ratio = depth_clipped / display_max_depth_m
+        depth_norm = ((1.0 - depth_ratio) * 255).astype("uint8")
+
+        depth_vis = cv2.cvtColor(depth_norm, cv2.COLOR_GRAY2BGR)
         cv2.putText(depth_vis, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(depth_vis, f"Display cap: {display_max_depth_m:.0f} m", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
     else:

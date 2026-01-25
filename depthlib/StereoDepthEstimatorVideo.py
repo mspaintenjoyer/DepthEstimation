@@ -1,6 +1,6 @@
 from depthlib.StereoDepthEstimator import StereoDepthEstimator
 from depthlib.input import stereo_stream
-from depthlib.visualizations import visualize_stereo_live
+from depthlib.visualizations import visualize_depth_live_gray
 from depthlib.stereo_core import StereoCore
 import cv2
 import time
@@ -73,7 +73,7 @@ class StereoDepthEstimatorVideo:
             fps = 1.0 / max(time.time() - t0, 1e-6)
 
             if self.visualize_live:
-                visualize_stereo_live(depth_m, fps)
+                visualize_depth_live_gray(depth_m, fps)
 
             if cv2.waitKey(1) & 0xFF == 27:  # ESC key to stop
                 cv2.destroyAllWindows()
