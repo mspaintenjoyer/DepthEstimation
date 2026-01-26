@@ -1,9 +1,10 @@
-from depthlib.StereoDepthEstimator import StereoDepthEstimator
-from depthlib.input import stereo_stream
-from depthlib.visualizations import visualize_depth_live_gray
+from depthlib.input import stereo_stream, open_capture
+from depthlib.visualizations import visualize_depth_live_gray, visualize_depth_live
 from depthlib.stereo_core import StereoCore
+from depthlib.threaded_stereo import ThreadedStereoCapture
 import cv2
 import time
+
 
 class StereoDepthEstimatorVideo:
     '''class for estimating depth from stereo video streams'''
@@ -13,19 +14,27 @@ class StereoDepthEstimatorVideo:
         left_source=None, # Path to left video
         right_source=None, # Path to right video
         downscale_factor=1.0,
-        device='cpu', # 'cpu' or 'cuda'
         visualize_live=False,
         saving_path=None, # Path to save output video
+        fast_mode=False,  # Enable fast mode for higher FPS
+        use_threading=True,  # Use threaded frame capture
+        target_fps=30,  # Maximum FPS to process (0 = unlimited)
+        drop_frames=False,  # Drop frames when processing is slow (True for live cameras, False for video files)
+        visualize_gray=False,
     ) -> None:
         '''Initialize the StereoDepthEstimatorVideo with video sources and parameters.'''
         self.left_source = left_source
         self.right_source = right_source
         self.downscale_factor = downscale_factor
-        self.device = device
         self.visualize_live = visualize_live
         self.saving_path = saving_path
-        
-        self.core = StereoCore(downscale_factor=downscale_factor, device=device)
+        self.fast_mode = fast_mode
+        self.use_threading = use_threading
+        self.target_fps = target_fps
+        self._frame_interval = 1.0 / target_fps if target_fps > 0 else 0
+        self.drop_frames = drop_frames
+        self.visualize_gray = visualize_gray
+        self.core = StereoCore(downscale_factor=downscale_factor, fast_mode=fast_mode)
 
     def configure_sgbm(self, **kwargs):
         """
@@ -64,17 +73,68 @@ class StereoDepthEstimatorVideo:
 
         self.core.configure_sgbm(**self.core.get_sgbm_params())
 
-        #Allow window resizing
+        # Allow window resizing
         cv2.namedWindow("Depth (live)", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Depth (live)", 960, 540)
-        for left_frame, right_frame in stereo_stream(self.left_source, self.right_source, downscale_factor=self.downscale_factor):
-            t0 = time.time()
-            disparity_px, depth_m = self.core.estimate_depth(left_frame, right_frame)
-            fps = 1.0 / max(time.time() - t0, 1e-6)
+        
+        if self.use_threading:
+            # Use threaded capture for better FPS
+            capture = ThreadedStereoCapture(
+                self.left_source, self.right_source, 
+                downscale_factor=self.downscale_factor,
+                drop_frames=self.drop_frames
+            )
+            capture.start()
+            
+            try:
+                frame_start_time = time.time()
+                while True:
+                    frame_pair = capture.read()
+                    if frame_pair is None:
+                        break
+                    
+                    left_frame, right_frame = frame_pair
+                    disparity_px, depth_m = self.core.estimate_depth(left_frame, right_frame)
 
-            if self.visualize_live:
-                visualize_depth_live_gray(depth_m, fps)
+                    if self.visualize_live:
+                        if self.visualize_gray:
+                            visualize_depth_live_gray(depth_m, self.target_fps)
+                        else:
+                            visualize_depth_live(depth_m, self.target_fps)
 
-            if cv2.waitKey(1) & 0xFF == 27:  # ESC key to stop
+                    if cv2.waitKey(1) & 0xFF == 27:  # ESC key to stop
+                        break
+                    
+                    # Enforce target FPS by sleeping if we're too fast
+                    if self._frame_interval > 0:
+                        elapsed = time.time() - frame_start_time
+                        sleep_time = self._frame_interval - elapsed
+                        if sleep_time > 0:
+                            time.sleep(sleep_time)
+                    frame_start_time = time.time()
+            finally:
+                capture.stop()
                 cv2.destroyAllWindows()
-                break
+        else:
+            # Original non-threaded path
+            frame_start_time = time.time()
+            for left_frame, right_frame in stereo_stream(self.left_source, self.right_source, downscale_factor=self.downscale_factor):
+                disparity_px, depth_m = self.core.estimate_depth(left_frame, right_frame)
+
+                if self.visualize_live:
+                    if self.visualize_gray:
+                        visualize_depth_live_gray(depth_m, self.target_fps)
+                    else:
+                        visualize_depth_live(depth_m, self.target_fps)
+
+                if cv2.waitKey(1) & 0xFF == 27:  # ESC key to stop
+                    cv2.destroyAllWindows()
+                    break
+                
+                # Enforce target FPS by sleeping if we're too fast
+                if self._frame_interval > 0:
+                    elapsed = time.time() - frame_start_time
+                    sleep_time = self._frame_interval - elapsed
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                frame_start_time = time.time()

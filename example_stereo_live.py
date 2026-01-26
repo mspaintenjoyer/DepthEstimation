@@ -27,7 +27,7 @@ def main():
         right_source=right_src,
         downscale_factor=downscale,
         visualize_live=True,
-        # device='cuda',
+        target_fps=30
     )
     estimator.configure_sgbm(
         num_disp=ndisp,

@@ -3,12 +3,90 @@
 from __future__ import annotations
 
 import warnings
-from typing import Tuple
+from typing import Tuple, Optional, Dict, Any
 
 import cv2
 import numpy as np
 
-__all__ = ["rectify_images"]
+__all__ = ["rectify_images", "RectificationCache"]
+
+
+class RectificationCache:
+    """Cache rectification maps to avoid recomputing them every frame."""
+    
+    def __init__(self):
+        self._cache_key: Optional[tuple] = None
+        self._maps: Optional[Dict[str, np.ndarray]] = None
+    
+    def _make_key(self, cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+                  dist_coeff_L, dist_coeff_R, rotation, translation, alpha) -> tuple:
+        """Create a hashable key from calibration parameters."""
+        def array_to_tuple(arr):
+            if arr is None:
+                return None
+            return tuple(np.asarray(arr).flatten())
+        
+        return (
+            array_to_tuple(cam_matrix_L),
+            array_to_tuple(cam_matrix_R),
+            baseline,
+            image_width,
+            image_height,
+            array_to_tuple(dist_coeff_L),
+            array_to_tuple(dist_coeff_R),
+            array_to_tuple(rotation),
+            array_to_tuple(translation),
+            alpha,
+        )
+    
+    def get_maps(self, cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+                 dist_coeff_L=None, dist_coeff_R=None, rotation=None, translation=None,
+                 alpha=0.0) -> Dict[str, np.ndarray]:
+        """Get cached rectification maps, computing if necessary."""
+        key = self._make_key(cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+                             dist_coeff_L, dist_coeff_R, rotation, translation, alpha)
+        
+        if self._cache_key == key and self._maps is not None:
+            return self._maps
+        
+        # Compute new maps
+        cam_mtx_L = np.asarray(cam_matrix_L, dtype=np.float64)
+        cam_mtx_R = np.asarray(cam_matrix_R, dtype=np.float64)
+        default_dist = np.zeros(5, dtype=np.float64)
+        dist_L = np.asarray(dist_coeff_L, dtype=np.float64) if dist_coeff_L is not None else default_dist
+        dist_R = np.asarray(dist_coeff_R, dtype=np.float64) if dist_coeff_R is not None else default_dist
+        
+        image_size = (image_width, image_height)
+        R = np.asarray(rotation, dtype=np.float64) if rotation is not None else np.eye(3, dtype=np.float64)
+        T = np.asarray(translation, dtype=np.float64) if translation is not None else np.array([-baseline, 0.0, 0.0], dtype=np.float64)
+        
+        rect_L, rect_R, proj_L, proj_R, Q, roi_L, roi_R = cv2.stereoRectify(
+            cam_mtx_L, dist_L, cam_mtx_R, dist_R, image_size, R, T,
+            flags=cv2.CALIB_ZERO_DISPARITY, alpha=alpha,
+        )
+        
+        map1_L, map2_L = cv2.initUndistortRectifyMap(
+            cam_mtx_L, dist_L, rect_L, proj_L, image_size, cv2.CV_32FC1
+        )
+        map1_R, map2_R = cv2.initUndistortRectifyMap(
+            cam_mtx_R, dist_R, rect_R, proj_R, image_size, cv2.CV_32FC1
+        )
+        
+        self._maps = {
+            'map1_L': map1_L, 'map2_L': map2_L,
+            'map1_R': map1_R, 'map2_R': map2_R,
+        }
+        self._cache_key = key
+        return self._maps
+    
+    def clear(self):
+        """Clear the cache."""
+        self._cache_key = None
+        self._maps = None
+
+
+# Global cache instance for convenience
+_global_cache = RectificationCache()
 
 
 def _ensure_image_size(image: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
@@ -54,6 +132,7 @@ def rectify_images(
 	rotation: np.ndarray | None = None,
 	translation: np.ndarray | None = None,
 	alpha: float = 0.0,
+	cache: Optional[RectificationCache] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
 	"""Rectify a stereo image pair using calibration parameters.
 
@@ -92,6 +171,21 @@ def rectify_images(
 	rectified_R : np.ndarray
 		Rectified right image (grayscale).
 	"""
+	# Use cached maps if available
+	if cache is not None:
+		maps = cache.get_maps(
+			cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+			dist_coeff_L, dist_coeff_R, rotation, translation, alpha
+		)
+		image_size = (image_width, image_height)
+		img_L = _ensure_image_size(img_L, image_size)
+		img_R = _ensure_image_size(img_R, image_size)
+		gray_L = _to_grayscale(img_L)
+		gray_R = _to_grayscale(img_R)
+		rectified_L = cv2.remap(gray_L, maps['map1_L'], maps['map2_L'], cv2.INTER_LINEAR)
+		rectified_R = cv2.remap(gray_R, maps['map1_R'], maps['map2_R'], cv2.INTER_LINEAR)
+		return rectified_L, rectified_R
+
 	# Ensure matrices are float64
 	cam_mtx_L = np.asarray(cam_matrix_L, dtype=np.float64)
 	cam_mtx_R = np.asarray(cam_matrix_R, dtype=np.float64)

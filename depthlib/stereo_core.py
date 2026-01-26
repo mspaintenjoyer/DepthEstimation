@@ -1,23 +1,16 @@
 import cv2
 import numpy as np
 from typing import Tuple, Optional, Dict
-from depthlib.rectify import rectify_images
+from depthlib.rectify import rectify_images, RectificationCache
 from depthlib.postprocess import postprocess_disparity
-import os
-os.add_dll_directory(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin")
-import sgm_cuda
 
 class StereoCore:
     '''Handles common stereo operations.'''
-    def __init__(self, downscale_factor=1.0, device='cpu') -> None:
+    def __init__(self, downscale_factor=1.0, fast_mode=False) -> None:
         self.downscale_factor = downscale_factor
-        self.device = device
+        self.fast_mode = fast_mode  # Skip expensive postprocessing for speed
         self.sgbm = None
-        self.sgm_gpu = None
-
-        # if device == 'cuda' and not cv2.cuda.getCudaEnabledDeviceCount():
-        #     raise RuntimeError("CUDA device not found or OpenCV not compiled with CUDA support.")
-
+        self._rect_cache = RectificationCache()  # Cache rectification maps
 
         # SGBM parameters with defaults
         self.sgbm_params = {
@@ -29,6 +22,7 @@ class StereoCore:
             'uniqueness_ratio': 10,
             'speckle_window_size': 50,
             'speckle_range': 2,
+            'sgbm_mode': 'sgbm_3way',  # Options: 'sgbm', 'hh', 'sgbm_3way', 'hh4'
             'focal_length': None,
             'baseline': None,
             'doffs': 0.0,
@@ -57,6 +51,15 @@ class StereoCore:
         P1 = 8 * channels * (params['block_size'] ** 2)
         P2 = 32 * channels * (params['block_size'] ** 2)
         
+        # Select SGBM mode - HH is faster, SGBM_3WAY is highest quality
+        mode_map = {
+            'sgbm': cv2.STEREO_SGBM_MODE_SGBM,
+            'hh': cv2.STEREO_SGBM_MODE_HH,
+            'sgbm_3way': cv2.STEREO_SGBM_MODE_SGBM_3WAY,
+            'hh4': cv2.STEREO_SGBM_MODE_HH4,
+        }
+        mode = mode_map.get(params.get('sgbm_mode', 'sgbm_3way'), cv2.STEREO_SGBM_MODE_SGBM_3WAY)
+        
         self.sgbm = cv2.StereoSGBM_create( # type: ignore
             minDisparity=params['min_disp'],
             numDisparities=params['num_disp'],
@@ -68,7 +71,7 @@ class StereoCore:
             uniquenessRatio=params['uniqueness_ratio'],
             speckleWindowSize=params['speckle_window_size'],
             speckleRange=params['speckle_range'],
-            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
+            mode=mode,
         )
 
     def configure_sgbm(self, **kwargs):
@@ -145,6 +148,7 @@ class StereoCore:
                 rotation=rotation,
                 translation=translation,
                 alpha=1.0,
+                cache=self._rect_cache,  # Use cached rectification maps
             )
             return left_rectified, right_rectified
 
@@ -158,24 +162,26 @@ class StereoCore:
     def _process_pair(self, left_img: np.ndarray, right_img: np.ndarray) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """Full pipeline for a single stereo pair (rectified input)."""
 
-        if self.device == 'cuda':
-            disparity_px = self.compute_disparity_cuda(left_img, right_img)
-        else:
-            disparity_px = self.compute_disparity(left_img, right_img)
+        disparity_px = self.compute_disparity(left_img, right_img)
 
         # crop the left invalid band
         disparity_px = disparity_px[:, self.sgbm_params['num_disp']:]
 
-        disparity_px = postprocess_disparity(
-            disparity_px,
-            left_image=left_img,
-            max_speckle_size=int(100*self.downscale_factor),
-            max_diff=1.0,
-            outlier_threshold=2.5,
-            fill_method='inpaint',
-            apply_outlier_removal=True,
-            apply_hole_filling=self.sgbm_params.get('hole_filling', False)
-        )
+        # Fast mode: minimal postprocessing for speed
+        if self.fast_mode:
+            # Just a quick median filter to reduce noise
+            disparity_px = cv2.medianBlur(disparity_px.astype(np.float32), 3)
+        else:
+            disparity_px = postprocess_disparity(
+                disparity_px,
+                left_image=left_img,
+                max_speckle_size=int(100*self.downscale_factor),
+                max_diff=1.0,
+                outlier_threshold=2.5,
+                fill_method='inpaint',
+                apply_outlier_removal=True,
+                apply_hole_filling=self.sgbm_params.get('hole_filling', False)
+            )
 
         f_pixels = self.sgbm_params.get('focal_length', None)
         baseline_m = self.sgbm_params.get('baseline', None)
@@ -224,24 +230,6 @@ class StereoCore:
         
         disp_fixed = self.sgbm.compute(rectified_L, rectified_R) # type: ignore
         return disp_fixed.astype(np.float32) / 16.0
-    
-    def compute_disparity_cuda(self, rectified_L: np.ndarray, 
-                              rectified_R: np.ndarray) -> np.ndarray:
-        """
-        Compute disparity map using CUDA from rectified stereo images.
-        Parameters:
-        -----------
-        rectified_L : np.ndarray
-            Rectified left image (grayscale)
-        rectified_R : np.ndarray
-            Rectified right image (grayscale)
-        Returns:
-        --------
-        np.ndarray : Disparity map in pixels (float32)
-        """
-        ndisp = 128
-        disp = sgm_cuda.compute(rectified_L, rectified_R, ndisp)
-        return disp.astype(np.float32)
 
     def disparity_to_depth(self, disp: np.ndarray, f_pixels: float, 
                           baseline_m: float, doffs: float = 0.0, 

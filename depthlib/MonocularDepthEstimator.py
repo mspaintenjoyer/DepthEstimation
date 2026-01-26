@@ -80,7 +80,7 @@ class MonocularDepthEstimator:
             raise RuntimeError("Depth map is not available. Please run estimate_depth first.")
 
         print("Visualizing depth map")
-        visualize_depth(self.depth_map,)
+        visualize_depth(self.depth_map, show_meter=False)
 
     def _get_torch_status(self):
         try:

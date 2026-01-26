@@ -12,7 +12,6 @@ class StereoDepthEstimator:
         left_source=None, # Path to left image
         right_source=None, # Path to right image
         downscale_factor=1.0,
-        device='cpu', # 'cpu' or 'cuda'
     ):
         """
         Initialize the StereoDepthEstimator.
@@ -35,13 +34,12 @@ class StereoDepthEstimator:
             raise ValueError("downscale_factor must be between 0 and 1.")
         self.downscale_factor = downscale_factor
 
-        self.core = StereoCore(downscale_factor=downscale_factor, device=device)
+        self.core = StereoCore(downscale_factor=downscale_factor)
 
         self.left_source = None
         self.right_source = None
         if left_source is not None and right_source is not None:
             self.left_source, self.right_source = load_stereo_pair(left_source, right_source, downscale_factor=downscale_factor)
-        self.device = device
         
         # Initialize SGBM matcher
         self.sgbm = None
