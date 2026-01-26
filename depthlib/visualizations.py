@@ -56,7 +56,7 @@ def visualize_disparity(disparity_px, title='Disparity Map', cmap='jet', vmin=No
 
 
 def visualize_depth(depth_m, title='Depth Map', cmap='turbo_r', max_depth=None, 
-                    show_invalid=True):
+                    show_invalid=True, show_meter=True):
     """
     Visualize depth map with proper colormap.
     
@@ -72,6 +72,8 @@ def visualize_depth(depth_m, title='Depth Map', cmap='turbo_r', max_depth=None,
         Maximum depth to display (auto if None)
     show_invalid : bool
         If True, show invalid regions (inf/very far) in black
+    show_meter : bool
+        If True, display depth in meters on colorbar
     """
     if depth_m is None:
         print("Warning: Depth map is None. Cannot visualize.")
@@ -104,8 +106,9 @@ def visualize_depth(depth_m, title='Depth Map', cmap='turbo_r', max_depth=None,
                  f'{invalid_pct:.1f}% invalid/far)')
     ax.axis('off')
     
-    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label('Depth (meters)', rotation=270, labelpad=15)
+    if show_meter:
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('Depth (meters)', rotation=270, labelpad=15)
     
     plt.tight_layout()
     plt.show()
