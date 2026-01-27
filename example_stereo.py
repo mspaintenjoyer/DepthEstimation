@@ -1,33 +1,71 @@
 import time
 import numpy as np
 import depthlib
-from depthlib.calibration import load_middlebury_calib
+from pathlib import Path
 
+# Simple manual parser for Middlebury calib.txt
+def parse_middlebury_calib(calib_path: str) -> dict:
+    text = Path(calib_path).read_text().strip().splitlines()
+    calib = {}
+    for line in text:
+        if not line.strip() or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip()
 
+        if key in ('cam0', 'cam1'):
+            # Parse [fx 0 cx; 0 fy cy; 0 0 1]
+            value = value.strip('[]')
+            rows = [row.split() for row in value.split(';')]
+            calib[key] = np.array([[float(x) for x in row] for row in rows], dtype=np.float32)
+        else:
+            # Numeric values
+            calib[key] = float(value) if '.' in value else int(value)
+    
+    # Derived values
+    calib['baseline_m'] = calib['baseline'] / 1000.0  # baseline is in mm
+    return calib
 
 if __name__ == "__main__":
-    left_image_path = "./assets/stereo_pairs/im0.png"
-    right_image_path = "./assets/stereo_pairs/im1.png"
+    left_image_path = "./assets/unrectified_stereo/unrec_0.png"
+    right_image_path = "./assets/unrectified_stereo/unrec_1.png"
+    calib = parse_middlebury_calib("./assets/calib_unrectified.txt")  
 
-    ndisp = 256          # before downscale; will be scaled by 0.5 → 128
+    ndisp = 290 #256          # before downscale; will be scaled by 0.5 → 128
     focal_length = 3997.684
-    baseline_mm = 193.001
-    doffs = 131.111
+    baseline_mm = 111.53 #193.001
+    doffs = 0 #131.111
+    #cam0=[1758.23 0 953.34; 0 1758.23 552.29; 0 0 1]
+    #cam1=[1758.23 0 953.34; 0 1758.23 552.29; 0 0 1]
+    vmin=75
+    vmax=262
 
-    cal = load_middlebury_calib("./assets/calib.txt")
+    # Using StereoDepthEstimator
+    #estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)
+    #estimator.configure_sgbm(
+    #    num_disp=ndisp,
+    #    focal_length=focal_length,
+    #    baseline=baseline_mm / 1000.0,
+    #    doffs=doffs,
+    #)
 
-    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)
-    estimator.configure_sgbm(
-        num_disp=cal.ndisp,
-        block_size=5,
-        uniqueness_ratio=10,
-        focal_length=float(cal.K0[0, 0]),
-        baseline=float(cal.baseline_m),
-        doffs=float(cal.doffs),
-        image_width=int(cal.width * 0.5),
-        image_height=int(cal.height * 0.5),
+    estimator = depthlib.StereoDepthEstimator(
+    left_source=left_image_path,
+    right_source=right_image_path,
+    downscale_factor=0.5,  
     )
 
+    estimator.configure_sgbm(
+        num_disp=ndisp,                    # or your adjusted value, e.g. 290 before downscale
+        focal_length=calib['cam0'][0, 0],
+        baseline=calib['baseline_m'],
+        doffs=calib['doffs'],
+        cam_matrix_L=calib['cam0'],            # full 3x3 intrinsic matrix for left
+        cam_matrix_R=calib['cam1'],            # full 3x3 for right
+        image_width=calib['width'],            # exact calibrated resolution
+        image_height=calib['height'],
+    )
     start_time = time.time()
     disparity_px, depth_m = estimator.estimate_depth()
     latency_ms = (time.time() - start_time) * 1000.0
