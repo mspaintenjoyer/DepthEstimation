@@ -1,0 +1,12 @@
+site_name: DepthEstimation Documentation
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Stereo Depth:
+      - Stereo Image API: stereo_image.md
+      - Stereo Video API: stereo_video.md
+  - Monocular Depth:
+      - Mono Depth API: mono_depth.md

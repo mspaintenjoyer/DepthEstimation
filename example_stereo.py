@@ -1,31 +1,5 @@
 import time
 import numpy as np
-import depthlib
-from pathlib import Path
-
-# Simple manual parser for Middlebury calib.txt
-def parse_middlebury_calib(calib_path: str) -> dict:
-    text = Path(calib_path).read_text().strip().splitlines()
-    calib = {}
-    for line in text:
-        if not line.strip() or '=' not in line:
-            continue
-        key, value = line.split('=', 1)
-        key = key.strip()
-        value = value.strip()
-
-        if key in ('cam0', 'cam1'):
-            # Parse [fx 0 cx; 0 fy cy; 0 0 1]
-            value = value.strip('[]')
-            rows = [row.split() for row in value.split(';')]
-            calib[key] = np.array([[float(x) for x in row] for row in rows], dtype=np.float32)
-        else:
-            # Numeric values
-            calib[key] = float(value) if '.' in value else int(value)
-    
-    # Derived values
-    calib['baseline_m'] = calib['baseline'] / 1000.0  # baseline is in mm
-    return calib
 
 if __name__ == "__main__":
     left_image_path = "./assets/unrectified_stereo/unrec_0.png"
@@ -41,19 +15,19 @@ if __name__ == "__main__":
     vmin=75
     vmax=262
 
-    # Using StereoDepthEstimator
-    #estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, downscale_factor=0.5)
-    #estimator.configure_sgbm(
-    #    num_disp=ndisp,
-    #    focal_length=focal_length,
-    #    baseline=baseline_mm / 1000.0,
-    #    doffs=doffs,
-    #)
+    # ndisp = 128
+    # focal_length = 679.01
+    # baseline_mm = 572.5
+    # doffs = 0
 
-    estimator = depthlib.StereoDepthEstimator(
-    left_source=left_image_path,
-    right_source=right_image_path,
-    downscale_factor=0.5,  
+    # Using StereoDepthEstimator
+    estimator = depthlib.StereoDepthEstimator(left_source=left_image_path, right_source=right_image_path, 
+                                              downscale_factor=0.5)
+    estimator.configure_sgbm(
+        num_disp=ndisp,
+        focal_length=focal_length,
+        baseline=baseline_mm / 1000.0,
+        doffs=doffs,
     )
 
     estimator.configure_sgbm(

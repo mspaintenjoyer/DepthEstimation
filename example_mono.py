@@ -7,7 +7,7 @@ if __name__ == "__main__":
 
     #Using MonocularDepthEstimator
     model_path = "models/hub/models--depth-anything--Depth-Anything-V2-Base-hf/snapshots/b1958afc87fb45a9e3746cb387596094de553ed8"
-    estimator = depthlib.MonocularDepthEstimator(model_path=model_path)
+    estimator = depthlib.MonocularDepthEstimator(model_path=model_path, device='cuda', downscale_factor=0.5)
 
     start_time = time.time()
 

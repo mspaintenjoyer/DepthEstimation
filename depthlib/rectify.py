@@ -1,171 +1,240 @@
-"""Post-processing utilities for disparity and depth maps."""
+"""
+Rectification utilities.
+
+Current version assumes the user provides already-rectified pairs unless
+calibration matrices are set in the estimator.
+"""
+
+import warnings
+from typing import Tuple, Optional, Dict, Any
 
 import cv2
 import numpy as np
 
-def filter_speckles(disparity, max_speckle_size=100, max_diff=1):
-    """
-    Remove small isolated regions (speckles) from disparity map.
-    
-    Parameters:
-    -----------
-    disparity : np.ndarray
-        Input disparity map
-    max_speckle_size : int
-        Maximum size of speckle region to filter (pixels)
-    max_diff : float
-        Maximum disparity difference to consider as same region
-    
-    Returns:
-    --------
-    filtered : np.ndarray
-        Filtered disparity map
-    """
-    filtered = disparity.copy()
-    
-    # Convert to 16-bit fixed-point for OpenCV
-    disp_16s = (filtered * 16.0).astype(np.int16)
-    
-    # Filter speckles
-    cv2.filterSpeckles(disp_16s, 0, max_speckle_size, int(max_diff * 16))
-    
-    # Convert back to float32
-    filtered = disp_16s.astype(np.float32) / 16.0
-    
-    return filtered
+__all__ = ["rectify_images", "RectificationCache"]
 
-def detect_outliers(disparity, threshold=3.0, kernel_size=5):
-    """
-    Detect outliers in disparity map using local statistics.
-    
-    Parameters:
-    -----------
-    disparity : np.ndarray
-        Input disparity map
-    threshold : float
-        Number of standard deviations for outlier detection
-    kernel_size : int
-        Size of local neighborhood for statistics
-        
-    Returns:
-    --------
-    mask : np.ndarray (bool)
-        Boolean mask where True indicates outliers
-    """
-    # Create a mask for valid disparities
-    valid_mask = disparity > 0
-    
-    # Compute local mean and std using box filter
-    mean = cv2.boxFilter(disparity, -1, (kernel_size, kernel_size))
-    
-    # Compute local standard deviation
-    disparity_sq = disparity ** 2
-    mean_sq = cv2.boxFilter(disparity_sq, -1, (kernel_size, kernel_size))
-    std = np.sqrt(np.maximum(mean_sq - mean ** 2, 0))
-    
-    # Detect outliers
-    diff = np.abs(disparity - mean)
-    outlier_mask = (diff > threshold * std) & valid_mask
-    
-    return outlier_mask
 
-def fill_holes(disparity, mask=None, method='inpaint', kernel_size=5):
-    """
-    Fill holes and invalid regions in disparity map.
+class RectificationCache:
+    """Cache rectification maps to avoid recomputing them every frame."""
     
-    Parameters:
-    -----------
-    disparity : np.ndarray
-        Input disparity map
-    mask : np.ndarray (bool), optional
-        Boolean mask indicating holes to fill (True = hole)
-        If None, fills all zero/invalid values
-    method : str
-        Filling method: 'inpaint' or 'nearest'
-    kernel_size : int
-        Kernel size for morphological operations
+    def __init__(self):
+        self._cache_key: Optional[tuple] = None
+        self._maps: Optional[Dict[str, np.ndarray]] = None
+    
+    def _make_key(self, cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+                  dist_coeff_L, dist_coeff_R, rotation, translation, alpha) -> tuple:
+        """Create a hashable key from calibration parameters."""
+        def array_to_tuple(arr):
+            if arr is None:
+                return None
+            return tuple(np.asarray(arr).flatten())
         
-    Returns:
-    --------
-    filled : np.ndarray
-        Disparity map with filled holes
-    """
-    filled = disparity.copy()
-    
-    # Create hole mask if not provided
-    if mask is None:
-        mask = (disparity <= 0)
-    
-    # Convert mask to uint8 for OpenCV
-    hole_mask = mask.astype(np.uint8) * 255
-    
-    if method == 'inpaint':
-        # Use Telea or NS inpainting algorithm
-        filled = cv2.inpaint(filled.astype(np.float32), hole_mask, 
-                            kernel_size, cv2.INPAINT_TELEA)
-    elif method == 'nearest':
-        # Dilate valid regions to fill small holes
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
-                                          (kernel_size, kernel_size))
-        # Create distance transform from valid pixels
-        dist = cv2.distanceTransform((~mask).astype(np.uint8), 
-                                     cv2.DIST_L2, 5)
-        # Fill with nearest valid neighbor
-        for _ in range(kernel_size):
-            dilated = cv2.dilate(filled, kernel)
-            filled = np.where(mask, dilated, filled)
-    
-    return filled
-
-def postprocess_disparity(disparity, **kwargs):
-    """
-    Apply a series of post-processing steps to refine the disparity map.
-    Parameters:
-    -----------
-    disparity : np.ndarray
-        Input disparity map
-    **kwargs : dict
-        Additional parameters for post-processing steps:
-        - max_speckle_size: int (default: 50)
-        - max_diff: float (default: 1)
-        - outlier_threshold: float (default: 3.0)
-        - outlier_kernel: int (default: 5)
-        - fill_method: str (default: 'inpaint')
-        - fill_kernel: int (default: 5)
-        - apply_outlier_removal: bool (default: True)
-        - apply_hole_filling: bool (default: True)
-    
-    Returns:
-    --------
-    refined_disparity : np.ndarray
-    """
-        
-    # Step 1: Quick speckle removal
-    result = filter_speckles(
-        disparity.copy(),
-        kwargs.get('max_speckle_size', 50),
-        kwargs.get('max_diff', 1)
-    )
-    
-    # Step 2: Outlier detection and masking
-    if kwargs.get('apply_outlier_removal', True):
-        outlier_mask = detect_outliers(
-            result,
-            threshold=kwargs.get('outlier_threshold', 3.0),
-            kernel_size=kwargs.get('outlier_kernel', 5)
-        )
-        # Set outliers to zero (invalid)
-        result[outlier_mask] = 0
-    
-    # Step 3: Hole filling
-    if kwargs.get('apply_hole_filling', True):
-        result = fill_holes(
-            result,
-            method=kwargs.get('fill_method', 'inpaint'),
-            kernel_size=kwargs.get('fill_kernel', 3)
+        return (
+            array_to_tuple(cam_matrix_L),
+            array_to_tuple(cam_matrix_R),
+            baseline,
+            image_width,
+            image_height,
+            array_to_tuple(dist_coeff_L),
+            array_to_tuple(dist_coeff_R),
+            array_to_tuple(rotation),
+            array_to_tuple(translation),
+            alpha,
         )
     
-    # Step 4: Fast 3x3 median filter
-    output = cv2.medianBlur(result.astype(np.float32), 3)
+    def get_maps(self, cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+                 dist_coeff_L=None, dist_coeff_R=None, rotation=None, translation=None,
+                 alpha=0.0) -> Dict[str, np.ndarray]:
+        """Get cached rectification maps, computing if necessary."""
+        key = self._make_key(cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+                             dist_coeff_L, dist_coeff_R, rotation, translation, alpha)
+        
+        if self._cache_key == key and self._maps is not None:
+            return self._maps
+        
+        # Compute new maps
+        cam_mtx_L = np.asarray(cam_matrix_L, dtype=np.float64)
+        cam_mtx_R = np.asarray(cam_matrix_R, dtype=np.float64)
+        default_dist = np.zeros(5, dtype=np.float64)
+        dist_L = np.asarray(dist_coeff_L, dtype=np.float64) if dist_coeff_L is not None else default_dist
+        dist_R = np.asarray(dist_coeff_R, dtype=np.float64) if dist_coeff_R is not None else default_dist
+        
+        image_size = (image_width, image_height)
+        R = np.asarray(rotation, dtype=np.float64) if rotation is not None else np.eye(3, dtype=np.float64)
+        T = np.asarray(translation, dtype=np.float64) if translation is not None else np.array([-baseline, 0.0, 0.0], dtype=np.float64)
+        
+        rect_L, rect_R, proj_L, proj_R, Q, roi_L, roi_R = cv2.stereoRectify(
+            cam_mtx_L, dist_L, cam_mtx_R, dist_R, image_size, R, T,
+            flags=cv2.CALIB_ZERO_DISPARITY, alpha=alpha,
+        )
+        
+        map1_L, map2_L = cv2.initUndistortRectifyMap(
+            cam_mtx_L, dist_L, rect_L, proj_L, image_size, cv2.CV_32FC1
+        )
+        map1_R, map2_R = cv2.initUndistortRectifyMap(
+            cam_mtx_R, dist_R, rect_R, proj_R, image_size, cv2.CV_32FC1
+        )
+        
+        self._maps = {
+            'map1_L': map1_L, 'map2_L': map2_L,
+            'map1_R': map1_R, 'map2_R': map2_R,
+        }
+        self._cache_key = key
+        return self._maps
+    
+    def clear(self):
+        """Clear the cache."""
+        self._cache_key = None
+        self._maps = None
 
-    return output
+
+# Global cache instance for convenience
+_global_cache = RectificationCache()
+
+
+def _ensure_image_size(image: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+	"""Ensure image matches the expected size, resizing if necessary."""
+	height, width = image.shape[:2]
+	expected_width, expected_height = size
+	if (width, height) == size:
+		return image
+
+	warnings.warn(
+		"Input image size %sx%s does not match calibration %sx%s; resizing for rectification." %
+		(width, height, expected_width, expected_height),
+		RuntimeWarning,
+		stacklevel=2,
+	)
+	return cv2.resize(image, size, interpolation=cv2.INTER_LINEAR)
+
+
+def _to_grayscale(image: np.ndarray) -> np.ndarray:
+	"""Convert image to grayscale if needed."""
+	if image.ndim == 2:
+		return image
+	if image.ndim == 3 and image.shape[2] == 1:
+		return image[:, :, 0]
+	if image.ndim == 3 and image.shape[2] == 3:
+		try:
+			return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+		except cv2.error:
+			return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+	raise ValueError("Unsupported image format for grayscale conversion")
+
+
+def rectify_images(
+	img_L: np.ndarray,
+	img_R: np.ndarray,
+	cam_matrix_L: np.ndarray,
+	cam_matrix_R: np.ndarray,
+	baseline: float,
+	image_width: int,
+	image_height: int,
+	dist_coeff_L: np.ndarray | None = None,
+	dist_coeff_R: np.ndarray | None = None,
+	rotation: np.ndarray | None = None,
+	translation: np.ndarray | None = None,
+	alpha: float = 0.0,
+	cache: Optional[RectificationCache] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+	"""Rectify a stereo image pair using calibration parameters.
+
+	Parameters
+	----------
+	img_L : np.ndarray
+		Left stereo image. Can be color or grayscale.
+	img_R : np.ndarray
+		Right stereo image. Can be color or grayscale.
+	cam_matrix_L : np.ndarray
+		3x3 camera matrix for left camera.
+	cam_matrix_R : np.ndarray
+		3x3 camera matrix for right camera.
+	baseline : float
+		Baseline distance between cameras (in meters or consistent units).
+	image_width : int
+		Expected image width in pixels.
+	image_height : int
+		Expected image height in pixels.
+	dist_coeff_L : np.ndarray, optional
+		Distortion coefficients for left camera (k1, k2, p1, p2, k3).
+	dist_coeff_R : np.ndarray, optional
+		Distortion coefficients for right camera (k1, k2, p1, p2, k3).
+	rotation : np.ndarray, optional
+		3x3 rotation matrix from left to right camera.
+	translation : np.ndarray, optional
+		3x1 translation vector from left to right camera (meters).
+	alpha : float, optional
+		Free-scaling parameter (0.0-1.0). 0 crops to valid pixels only,
+		1 keeps all original pixels. Default is 0.0.
+
+	Returns
+	-------
+	rectified_L : np.ndarray
+		Rectified left image (grayscale).
+	rectified_R : np.ndarray
+		Rectified right image (grayscale).
+	"""
+	# Use cached maps if available
+	if cache is not None:
+		maps = cache.get_maps(
+			cam_matrix_L, cam_matrix_R, baseline, image_width, image_height,
+			dist_coeff_L, dist_coeff_R, rotation, translation, alpha
+		)
+		image_size = (image_width, image_height)
+		img_L = _ensure_image_size(img_L, image_size)
+		img_R = _ensure_image_size(img_R, image_size)
+		gray_L = _to_grayscale(img_L)
+		gray_R = _to_grayscale(img_R)
+		rectified_L = cv2.remap(gray_L, maps['map1_L'], maps['map2_L'], cv2.INTER_LINEAR)
+		rectified_R = cv2.remap(gray_R, maps['map1_R'], maps['map2_R'], cv2.INTER_LINEAR)
+		return rectified_L, rectified_R
+
+	# Ensure matrices are float64
+	cam_mtx_L = np.asarray(cam_matrix_L, dtype=np.float64)
+	cam_mtx_R = np.asarray(cam_matrix_R, dtype=np.float64)
+
+	# Use provided distortion or default to zero-distortion
+	default_dist = np.zeros(5, dtype=np.float64)
+	dist_L = np.asarray(dist_coeff_L, dtype=np.float64) if dist_coeff_L is not None else default_dist
+	dist_R = np.asarray(dist_coeff_R, dtype=np.float64) if dist_coeff_R is not None else default_dist
+
+	image_size = (image_width, image_height)
+
+	# Ensure images match expected size
+	img_L = _ensure_image_size(img_L, image_size)
+	img_R = _ensure_image_size(img_R, image_size)
+
+	# Use provided extrinsics or fall back to canonical baseline along x-axis
+	R = np.asarray(rotation, dtype=np.float64) if rotation is not None else np.eye(3, dtype=np.float64)
+	T = np.asarray(translation, dtype=np.float64) if translation is not None else np.array([-baseline, 0.0, 0.0], dtype=np.float64)
+
+	# Compute stereo rectification
+	rect_L, rect_R, proj_L, proj_R, Q, roi_L, roi_R = cv2.stereoRectify(
+		cam_mtx_L,
+		dist_L,
+		cam_mtx_R,
+		dist_R,
+		image_size,
+		R,
+		T,
+		flags=cv2.CALIB_ZERO_DISPARITY,
+		alpha=alpha,
+	)
+
+	# Generate rectification maps
+	map1_L, map2_L = cv2.initUndistortRectifyMap(
+		cam_mtx_L, dist_L, rect_L, proj_L, image_size, cv2.CV_32FC1
+	)
+	map1_R, map2_R = cv2.initUndistortRectifyMap(
+		cam_mtx_R, dist_R, rect_R, proj_R, image_size, cv2.CV_32FC1
+	)
+
+	# Convert to grayscale
+	gray_L = _to_grayscale(img_L)
+	gray_R = _to_grayscale(img_R)
+
+	# Apply rectification
+	rectified_L = cv2.remap(gray_L, map1_L, map2_L, cv2.INTER_LINEAR)
+	rectified_R = cv2.remap(gray_R, map1_R, map2_R, cv2.INTER_LINEAR)
+
+	return rectified_L, rectified_R
