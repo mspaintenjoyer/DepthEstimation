@@ -1,9 +1,6 @@
-"""
-Input utilities: loading stereo image pairs.
-"""
+"""Input utilities for loading stereo image pairs and live streams."""
 
-from pathlib import Path
-from typing import Tuple, Union
+from typing import Generator, Iterable, Tuple, Union
 
 import cv2
 import numpy as np
@@ -38,26 +35,54 @@ def load_image(path: Union[str, Path], downscale_factor: float = 1.0) -> np.ndar
     return img
 
 
-def load_stereo_pair(
-    left_source: Union[str, Path],
-    right_source: Union[str, Path],
+    return left_img_rgb, right_img_rgb
+
+
+# --- Live video helpers ---
+
+def open_capture(source: Union[int, str]) -> cv2.VideoCapture:
+    """Open a cv2.VideoCapture from camera index, file path, or URL."""
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video source: {source}")
+    return cap
+
+
+def _read_frame(cap: cv2.VideoCapture, downscale_factor: float) -> np.ndarray:
+    ok, frame = cap.read()
+    if not ok or frame is None:
+        raise RuntimeError("Failed to read frame from video source")
+    if downscale_factor != 1.0:
+        new_size = (
+            int(frame.shape[1] * downscale_factor),
+            int(frame.shape[0] * downscale_factor),
+        )
+        frame = cv2.resize(frame, new_size, interpolation=cv2.INTER_AREA)
+    return frame
+
+
+def stereo_stream(
+    left_source: Union[int, str],
+    right_source: Union[int, str],
     downscale_factor: float = 1.0,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
     """
-    Load a stereo pair as BGR images with optional downscaling.
+    Yield synchronized frames from two captures.
 
-    Parameters
-    ----------
-    left_source, right_source : str or Path
-        Left/right image paths.
-    downscale_factor : float
-        Downscale factor for both images.
-
-    Returns
-    -------
-    left_img, right_img : np.ndarray
-        Loaded left and right images (BGR, uint8).
+    The generator raises StopIteration when either stream ends. Caller is
+    responsible for releasing captures when finished.
     """
-    left = load_image(left_source, downscale_factor)
-    right = load_image(right_source, downscale_factor)
-    return left, right
+    if downscale_factor <= 0 or downscale_factor > 1.0:
+        raise ValueError("downscale_factor must be between 0 and 1.")
+
+    cap_L = open_capture(left_source)
+    cap_R = open_capture(right_source)
+
+    try:
+        while True:
+            left = _read_frame(cap_L, downscale_factor)
+            right = _read_frame(cap_R, downscale_factor)
+            yield left, right
+    finally:
+        cap_L.release()
+        cap_R.release()

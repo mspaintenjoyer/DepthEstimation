@@ -120,110 +120,33 @@ def fill_left_band(
     disp : np.ndarray
         Disparity map with left band filled.
     """
-    disp = disparity.copy().astype(np.float32)
-    H, W = disp.shape
+        
+    # Step 1: Quick speckle removal
+    result = filter_speckles(
+        disparity.copy(),
+        kwargs.get('max_speckle_size', 50),
+        kwargs.get('max_diff', 1)
+    )
+    
+    # Step 2: Outlier detection and masking
+    if kwargs.get('apply_outlier_removal', True):
+        outlier_mask = detect_outliers(
+            result,
+            threshold=kwargs.get('outlier_threshold', 3.0),
+            kernel_size=kwargs.get('outlier_kernel', 5)
+        )
+        # Set outliers to zero (invalid)
+        result[outlier_mask] = 0
+    
+    # Step 3: Hole filling
+    if kwargs.get('apply_hole_filling', True):
+        result = fill_holes(
+            result,
+            method=kwargs.get('fill_method', 'inpaint'),
+            kernel_size=kwargs.get('fill_kernel', 3)
+        )
+    
+    # Step 4: Fast 3x3 median filter
+    output = cv2.medianBlur(result.astype(np.float32), 3)
 
-    band_widths = np.zeros(H, dtype=np.int32)
-    any_band = False
-
-    # Find band width per row
-    for y in range(H):
-        row = disp[y, : min(max_search, W)]
-        val_idx = np.where(row != invalid_value)[0]
-        if val_idx.size == 0:
-            continue
-        w = val_idx[0]
-        if w > 0:
-            band_widths[y] = w
-            any_band = True
-
-    if not any_band:
-        return disp
-
-    # Fill each detected band from the first valid value to its right
-    for y in range(H):
-        w = band_widths[y]
-        if w == 0:
-            continue
-        src_val = disp[y, w]
-        disp[y, :w] = src_val
-
-    return disp
-
-def lr_consistency_mask(disp_L: np.ndarray, disp_R: np.ndarray, thresh: float = 1.0) -> np.ndarray:
-    """
-    Returns mask (bool) where disparities are consistent.
-    disp_L: disparity from L->R (pixels)
-    disp_R: disparity from R->L (pixels)
-    """
-    H, W = disp_L.shape
-    xs = np.arange(W, dtype=np.int32)[None, :].repeat(H, axis=0)
-    ys = np.arange(H, dtype=np.int32)[:, None].repeat(W, axis=1)
-
-    dL = disp_L
-    xR = (xs - np.rint(dL).astype(np.int32))
-
-    valid = (dL > 0) & (xR >= 0) & (xR < W)
-    dR_sample = np.zeros_like(dL, dtype=np.float32)
-    dR_sample[valid] = disp_R[ys[valid], xR[valid]]
-
-    # Consistency: dL + dR ~= 0 (since disp_R is R->L)
-    ok = valid & (np.abs(dL + dR_sample) <= thresh)
-    return ok
-
-def compute_valid_roi(
-    disparity: np.ndarray,
-    invalid_value: float = -1.0,
-    min_valid_frac: float = 0.60,
-):
-    """
-    Compute a horizontal ROI [x0:x1) that excludes columns with too many invalids.
-    Returns (x0, x1). If ROI cannot be found, returns full width.
-    """
-    H, W = disparity.shape
-    valid = (disparity != invalid_value) & (disparity > 0)
-    col_frac = valid.mean(axis=0)  # fraction of rows valid per column
-
-    good = col_frac >= float(min_valid_frac)
-    if not good.any():
-        return 0, W
-
-    x0 = int(good.argmax())
-    x1 = int(W - good[::-1].argmax())
-    if x1 <= x0 + 8:  # avoid degenerate crops
-        return 0, W
-    return x0, x1
-
-
-def postprocess_disparity(disparity_L: np.ndarray, disparity_R: Optional[np.ndarray] = None, **kwargs) -> np.ndarray:
-
-    """
-    Minimal post-processing for disparity maps.
-
-    Returns
-    -------
-    result : np.ndarray
-        Refined disparity map.
-    """
-    invalid_value = kwargs.get("invalidate_value", -1.0)
-    result = disparity_L.copy().astype(np.float32)
-
-    # 1) LR consistency invalidation 
-    if (disparity_R is not None) and kwargs.get("apply_lr_consistency", True):
-        ok = lr_consistency_mask(result, disparity_R, thresh=float(kwargs.get("lr_thresh", 1.0)))
-        result[~ok] = invalid_value
-
-    # 2) Speckle filtering on valid disparities
-    if kwargs.get("apply_speckle_filter", True):
-        tmp = result.copy()
-        tmp[tmp == invalid_value] = 0.0
-        tmp = filter_speckles(tmp, max_speckle_size=int(kwargs.get("max_speckle_size", 100)),max_diff=float(kwargs.get("max_diff", 1.0)))
-        # keep invalids invalid
-        result[result != invalid_value] = tmp[result != invalid_value]
-
-    # 3) Optional left-band fill 
-    if kwargs.get("apply_fill_from_right", False):
-        result = fill_left_band(result, invalid_value=invalid_value)
-
-    return result
-
+    return output
