@@ -2,3 +2,5 @@
 depthlib/__pycache__/
 models/
 assets/
+__pycache__/
+.pytest_cache/
