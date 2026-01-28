@@ -29,5 +29,6 @@ def test_full_pipeline_smoke_test():
     # 5. Assert results exist
     assert disparity is not None
     assert depth is not None
-    assert disparity.shape == (480, 640)
-    assert depth.shape == (480, 640)
+    expected_width = 640 - 16 #accounting for left band crop
+    assert disparity.shape == (480, expected_width)
+    assert depth.shape == (480, expected_width)
