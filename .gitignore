@@ -1,5 +1,4 @@
 .venv/
-depthlib/__pycache__/
 models/
 assets/
 __pycache__/
