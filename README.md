@@ -1,4 +1,7 @@
-# Python Environment Setup
+# Depthlib
+A python library for depth estimation using stereo vision
+
+## Development Environment Setup
 
 Follow these steps to prepare the project environment:
 
@@ -30,3 +33,11 @@ Follow these steps to prepare the project environment:
       pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
       ```
     See https://pytorch.org/get-started/locally/ to choose the correct CUDA version.
+
+### Run Examples
+- For stereo images - example_stereo.py
+- For stereo video - example_stereo_live.py
+
+> [!Note]
+> Download demo left and right videos from [here](https://drive.google.com/drive/folders/1bNGE9a86ZHHI8yMr0GGY3mHU0LQ8qmYK?usp=sharing)
+> and put it inside assets folder.

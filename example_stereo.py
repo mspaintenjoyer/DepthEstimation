@@ -3,8 +3,8 @@ import time
 import numpy as np
 
 if __name__ == "__main__":
-    left_image_path = './assets/im0.png'
-    right_image_path = './assets/im1.png'
+    left_image_path = './assets/stereo_pairs/im0.png'
+    right_image_path = './assets/stereo_pairs/im1.png'
 
     ndisp = 280
     focal_length = 3997.684
