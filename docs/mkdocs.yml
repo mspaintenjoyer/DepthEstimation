@@ -1,12 +1,48 @@
-site_name: DepthEstimation Documentation
+site_name: Depthlib Documentation
+site_description: A Python library for depth estimation using stereo vision and monocular models
+site_author: Depthlib Team
 
 theme:
   name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - content.code.annotate
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - tables
+  - attr_list
+  - md_in_html
 
 nav:
   - Home: index.md
-  - Stereo Depth:
-      - Stereo Image API: stereo_image.md
-      - Stereo Video API: stereo_video.md
-  - Monocular Depth:
-      - Mono Depth API: mono_depth.md
+  - Getting Started: getting_started.md
+  - API Reference:
+      - Stereo Depth (Images): stereo_image.md
+      - Stereo Depth (Video): stereo_video.md
+      - Monocular Depth: mono_depth.md
+      - Visualization Utilities: visualizations.md
+  - Configuration:
+      - SGBM Parameters: sgbm_config.md
+  - Examples: examples.md
